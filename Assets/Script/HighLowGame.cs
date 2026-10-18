@@ -4,39 +4,59 @@ using UnityEngine.UI;
 
 public class HighLowGame : MonoBehaviour
 {
-    // These fields appear in the Inspector so you can drag objects into them
     [Header("UI")]
     [SerializeField] private TMP_Text cardText;
     [SerializeField] private TMP_Text chipsText;
     [SerializeField] private TMP_Text resultText;
+    [SerializeField] private TMP_Text roundText;
     [SerializeField] private Button higherButton;
     [SerializeField] private Button lowerButton;
 
-    // Game rules, adjustable in the Inspector without editing code
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
     [SerializeField] private int betAmount = 10;
+    [SerializeField] private int guessesPerRound = 10;
+    [SerializeField] private int baseRoundGoal = 40;         // Chips to earn in round 1
+    [SerializeField] private int goalIncreasePerRound = 10;  // Extra chips required each new round
 
-    private int chips;        // Current chip count
-    private int currentCard;  // Card on screen (1 = A, 11 = J, 12 = Q, 13 = K)
+    private int chips;
+    private int currentCard;   // 1 = A, 11 = J, 12 = Q, 13 = K
+    private int roundNumber;
+    private int targetChips;   // Chip total needed to clear the current round
+    private int guessesLeft;
+    private bool isGameOver;
 
-    // Start runs once when the game begins
     private void Start()
     {
         chips = startingChips;
         currentCard = DrawCard();
 
-        // Connect the buttons to the Guess method
         higherButton.onClick.AddListener(() => Guess(true));
         lowerButton.onClick.AddListener(() => Guess(false));
 
+        StartRound(1);
         resultText.text = "Higher or lower?";
         UpdateUI();
     }
 
-    // Called when the player clicks a button. guessHigher = true means "HIGHER"
+    // Set up a new round: reset guesses and calculate the new goal
+    private void StartRound(int number)
+    {
+        roundNumber = number;
+        guessesLeft = guessesPerRound;
+
+        int chipsToEarn = baseRoundGoal + goalIncreasePerRound * (number - 1);
+        targetChips = chips + chipsToEarn;
+    }
+
     private void Guess(bool guessHigher)
     {
+        if (isGameOver)
+        {
+            return;
+        }
+
+        guessesLeft--;
         int nextCard = DrawCard();
 
         if (nextCard == currentCard)
@@ -60,23 +80,33 @@ public class HighLowGame : MonoBehaviour
         }
 
         currentCard = nextCard;
-        UpdateUI();
 
-        if (chips <= 0)
+        if (chips >= targetChips)
         {
-            resultText.text = "Out of chips! Game over.";
-            higherButton.interactable = false;
-            lowerButton.interactable = false;
+            resultText.text = $"Round {roundNumber} cleared!";
+            StartRound(roundNumber + 1);
         }
+        else if (chips <= 0 || guessesLeft <= 0)
+        {
+            GameOver();
+        }
+
+        UpdateUI();
     }
 
-    // Draw a random card from 1 to 13
+    private void GameOver()
+    {
+        isGameOver = true;
+        resultText.text = $"Game over! You reached round {roundNumber}.";
+        higherButton.interactable = false;
+        lowerButton.interactable = false;
+    }
+
     private int DrawCard()
     {
         return Random.Range(1, 14);
     }
 
-    // Convert a card value to its display name
     private string CardName(int value)
     {
         return value switch
@@ -89,10 +119,10 @@ public class HighLowGame : MonoBehaviour
         };
     }
 
-    // Refresh the text on screen
     private void UpdateUI()
     {
         cardText.text = CardName(currentCard);
         chipsText.text = $"Chips: {chips}";
+        roundText.text = $"Round {roundNumber}  |  Goal: {targetChips}  |  Guesses: {guessesLeft}";
     }
 }
