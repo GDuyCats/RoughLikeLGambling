@@ -13,6 +13,6 @@ MonoBehaviour:
   m_Name: LuckyStreak
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
   displayName: Lucky Streak
-  description: +5 chips on every correct guess
+  description: +50% chips on every correct guess
   type: 0
-  value: 0
+  value: 50

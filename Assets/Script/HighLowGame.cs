@@ -7,13 +7,23 @@ public class HighLowGame : MonoBehaviour
 {
     private const int CardCount = 13;
 
+    // The three guesses a player can make
+    private enum GuessType
+    {
+        Higher,
+        Lower,
+        Tie
+    }
+
     [Header("UI")]
     [SerializeField] private TMP_Text cardText;
     [SerializeField] private TMP_Text chipsText;
     [SerializeField] private TMP_Text resultText;
     [SerializeField] private TMP_Text roundText;
+    [SerializeField] private TMP_Text ownedUpgradesText;
     [SerializeField] private Button higherButton;
     [SerializeField] private Button lowerButton;
+    [SerializeField] private Button tieButton;
     [SerializeField] private Button restartButton;
 
     [Header("Upgrade Screen")]
@@ -24,7 +34,8 @@ public class HighLowGame : MonoBehaviour
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
     [SerializeField] private int betAmount = 10;
-    [SerializeField] private float payoutMultiplier = 1.2f;  // Above 1 gives the player a small edge
+    [SerializeField] private float payoutMultiplier = 1.2f;
+    [SerializeField] private int baseWinBonus = 3;   // Flat chips on every win, so safe guesses still feel rewarding
     [SerializeField] private int guessesPerRound = 10;
     [SerializeField] private int baseRoundGoal = 40;
     [SerializeField] private int goalIncreasePerRound = 10;
@@ -34,6 +45,7 @@ public class HighLowGame : MonoBehaviour
 
     private TMP_Text higherButtonText;
     private TMP_Text lowerButtonText;
+    private TMP_Text tieButtonText;
 
     private int chips;
     private int currentCard;   // 1 = A, 11 = J, 12 = Q, 13 = K
@@ -46,15 +58,16 @@ public class HighLowGame : MonoBehaviour
     {
         higherButtonText = higherButton.GetComponentInChildren<TMP_Text>();
         lowerButtonText = lowerButton.GetComponentInChildren<TMP_Text>();
+        tieButtonText = tieButton.GetComponentInChildren<TMP_Text>();
 
-        higherButton.onClick.AddListener(() => Guess(true));
-        lowerButton.onClick.AddListener(() => Guess(false));
+        higherButton.onClick.AddListener(() => Guess(GuessType.Higher));
+        lowerButton.onClick.AddListener(() => Guess(GuessType.Lower));
+        tieButton.onClick.AddListener(() => Guess(GuessType.Tie));
         restartButton.onClick.AddListener(StartNewRun);
 
         StartNewRun();
     }
 
-    // Reset everything for a fresh run
     private void StartNewRun()
     {
         chips = startingChips;
@@ -66,7 +79,7 @@ public class HighLowGame : MonoBehaviour
         restartButton.gameObject.SetActive(false);
 
         StartRound(1);
-        resultText.text = "Higher or lower?";
+        resultText.text = "Higher, lower or tie?";
         UpdateUI();
     }
 
@@ -79,7 +92,7 @@ public class HighLowGame : MonoBehaviour
         targetChips = chips + chipsToEarn;
     }
 
-    private void Guess(bool guessHigher)
+    private void Guess(GuessType guess)
     {
         if (isGameOver)
         {
@@ -88,9 +101,26 @@ public class HighLowGame : MonoBehaviour
 
         guessesLeft--;
         int nextCard = DrawCard();
+        bool isTie = nextCard == currentCard;
 
-        if (nextCard == currentCard)
+        if (guess == GuessType.Tie)
         {
+            if (isTie)
+            {
+                int winAmount = GetWinAmount(guess) + GetUpgradeTotal(UpgradeType.TieReward);
+                chips += winAmount;
+                resultText.text = $"TIE! +{winAmount} chips";
+            }
+            else
+            {
+                int lossAmount = GetLossAmount();
+                chips -= lossAmount;
+                resultText.text = $"Not a tie! -{lossAmount} chips";
+            }
+        }
+        else if (isTie)
+        {
+            // Guessed higher or lower but the cards matched: no loss
             int tieReward = GetUpgradeTotal(UpgradeType.TieReward);
             chips += tieReward;
             resultText.text = tieReward > 0 ? $"Tie! +{tieReward} chips" : "Tie! No chips lost.";
@@ -98,17 +128,17 @@ public class HighLowGame : MonoBehaviour
         else
         {
             bool isHigher = nextCard > currentCard;
+            bool isCorrect = (guess == GuessType.Higher) == isHigher;
 
-            if (isHigher == guessHigher)
+            if (isCorrect)
             {
-                // Must be calculated before currentCard changes
-                int winAmount = GetWinAmount(guessHigher);
+                int winAmount = GetWinAmount(guess);
                 chips += winAmount;
                 resultText.text = $"Correct! +{winAmount} chips";
             }
             else
             {
-                int lossAmount = Mathf.Max(0, betAmount - GetUpgradeTotal(UpgradeType.LossReduction));
+                int lossAmount = GetLossAmount();
                 chips -= lossAmount;
                 resultText.text = $"Wrong! -{lossAmount} chips";
             }
@@ -116,7 +146,6 @@ public class HighLowGame : MonoBehaviour
 
         currentCard = nextCard;
 
-        // If the revealed card is A or K, deal a fresh card for the next guess
         if (IsExtremeCard(currentCard))
         {
             currentCard = DrawPlayableCard();
@@ -135,33 +164,55 @@ public class HighLowGame : MonoBehaviour
         UpdateUI();
     }
 
-    // Number of card values that would win with this guess
-    private int CountWinningCards(bool guessHigher)
+    private int GetCurrentBet()
     {
-        return guessHigher ? CardCount - currentCard : currentCard - 1;
+        return betAmount + GetUpgradeTotal(UpgradeType.BetIncrease);
+    }
+
+    // Number of card values that would win with this guess
+    private int CountWinningCards(GuessType guess)
+    {
+        return guess switch
+        {
+            GuessType.Higher => CardCount - currentCard,
+            GuessType.Lower => currentCard - 1,
+            _ => 1   // Only the same value wins a tie guess
+        };
     }
 
     // Number of card values that would lose with this guess
-    private int CountLosingCards(bool guessHigher)
+    private int CountLosingCards(GuessType guess)
     {
-        return guessHigher ? currentCard - 1 : CardCount - currentCard;
+        return guess switch
+        {
+            GuessType.Higher => currentCard - 1,
+            GuessType.Lower => CardCount - currentCard,
+            _ => CardCount - 1
+        };
     }
 
-    // Riskier guesses pay more: payout is based on losing cards vs winning cards
-    private int GetWinAmount(bool guessHigher)
+    private int GetWinAmount(GuessType guess)
     {
-        int winningCards = CountWinningCards(guessHigher);
+        int winningCards = CountWinningCards(guess);
 
         if (winningCards == 0)
         {
             return 0;
         }
 
-        int losingCards = CountLosingCards(guessHigher);
-        float payout = betAmount * payoutMultiplier * losingCards / winningCards;
-        int baseWin = Mathf.Max(1, Mathf.RoundToInt(payout));
+        int losingCards = CountLosingCards(guess);
+        float payout = GetCurrentBet() * payoutMultiplier * losingCards / winningCards;
+        int baseWin = Mathf.Max(1, Mathf.RoundToInt(payout) + baseWinBonus);
 
-        return baseWin + GetUpgradeTotal(UpgradeType.BonusChipsPerWin);
+        int percentBonus = GetUpgradeTotal(UpgradeType.WinPayoutPercent);
+        int boostedWin = Mathf.RoundToInt(baseWin * (100 + percentBonus) / 100f);
+
+        return boostedWin + GetUpgradeTotal(UpgradeType.BonusChipsPerWin);
+    }
+
+    private int GetLossAmount()
+    {
+        return Mathf.Max(0, GetCurrentBet() - GetUpgradeTotal(UpgradeType.LossReduction));
     }
 
     private void ClearRound()
@@ -209,7 +260,7 @@ public class HighLowGame : MonoBehaviour
         upgradePanel.SetActive(false);
 
         StartRound(roundNumber + 1);
-        resultText.text = $"Got {upgrade.DisplayName}! Higher or lower?";
+        resultText.text = $"Got {upgrade.DisplayName}! Higher, lower or tie?";
         UpdateUI();
     }
 
@@ -243,11 +294,51 @@ public class HighLowGame : MonoBehaviour
         return total;
     }
 
-    // A guess button is only clickable if that guess can actually win
+    private int CountOwned(Upgrade upgrade)
+    {
+        int count = 0;
+
+        foreach (Upgrade owned in ownedUpgrades)
+        {
+            if (owned == upgrade)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private string BuildOwnedUpgradesText()
+    {
+        if (ownedUpgrades.Count == 0)
+        {
+            return "Upgrades:\nNone yet";
+        }
+
+        string text = "Upgrades:";
+        List<Upgrade> listed = new List<Upgrade>();
+
+        foreach (Upgrade upgrade in ownedUpgrades)
+        {
+            if (listed.Contains(upgrade))
+            {
+                continue;
+            }
+
+            listed.Add(upgrade);
+            int count = CountOwned(upgrade);
+            text += count > 1 ? $"\n{upgrade.DisplayName} x{count}" : $"\n{upgrade.DisplayName}";
+        }
+
+        return text;
+    }
+
     private void SetGuessButtonsActive(bool active)
     {
-        higherButton.interactable = active && CountWinningCards(true) > 0;
-        lowerButton.interactable = active && CountWinningCards(false) > 0;
+        higherButton.interactable = active && CountWinningCards(GuessType.Higher) > 0;
+        lowerButton.interactable = active && CountWinningCards(GuessType.Lower) > 0;
+        tieButton.interactable = active;
     }
 
     private void GameOver()
@@ -268,7 +359,6 @@ public class HighLowGame : MonoBehaviour
         return value == 1 || value == CardCount;
     }
 
-    // Draw a card from 2 to Q, so both guesses always carry some risk
     private int DrawPlayableCard()
     {
         return Random.Range(2, CardCount);
@@ -286,22 +376,23 @@ public class HighLowGame : MonoBehaviour
         };
     }
 
-    private string GuessButtonLabel(string label, bool guessHigher)
+    private string GuessButtonLabel(string label, GuessType guess)
     {
-        int winAmount = GetWinAmount(guessHigher);
+        int winAmount = GetWinAmount(guess);
         return winAmount > 0 ? $"{label}\n+{winAmount}" : $"{label}\n-";
     }
 
     private void UpdateUI()
     {
         cardText.text = CardName(currentCard);
-        chipsText.text = $"Chips: {chips}";
+        chipsText.text = $"Chips: {chips}   Bet: {GetCurrentBet()}";
         roundText.text = $"Round {roundNumber}  |  Goal: {targetChips}  |  Guesses: {guessesLeft}";
+        ownedUpgradesText.text = BuildOwnedUpgradesText();
 
-        higherButtonText.text = GuessButtonLabel("HIGHER", true);
-        lowerButtonText.text = GuessButtonLabel("LOWER", false);
+        higherButtonText.text = GuessButtonLabel("HIGHER", GuessType.Higher);
+        lowerButtonText.text = GuessButtonLabel("LOWER", GuessType.Lower);
+        tieButtonText.text = GuessButtonLabel("TIE", GuessType.Tie);
 
-        // Refresh which buttons are clickable for the new card
         if (!isGameOver && !upgradePanel.activeSelf)
         {
             SetGuessButtonsActive(true);

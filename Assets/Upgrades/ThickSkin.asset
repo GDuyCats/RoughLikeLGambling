@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fa69e484cc793d94e80522053b8bdb7a, type: 3}
   m_Name: ThickSkin
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
-  displayName: 
-  description: 
-  type: 0
-  value: 0
+  displayName: Thick Skin
+  description: Lose 5 fewer chips on a wrong guess
+  type: 4
+  value: 5

@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fa69e484cc793d94e80522053b8bdb7a, type: 3}
   m_Name: EvenMoney
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
-  displayName: 
-  description: 
-  type: 0
-  value: 0
+  displayName: "Even Money\t"
+  description: Ties give +20 chips
+  type: 2
+  value: 20
