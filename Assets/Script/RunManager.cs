@@ -48,10 +48,11 @@ public class RunManager : MonoBehaviour
     private int targetChips;
     private int playsLeft;
     private bool isGameOver;
-
+    private int playsUsedThisRound;
     // Minigames check this before letting the player act
     public bool CanPlay => !isGameOver && !upgradePanel.activeSelf;
-
+    public int PlaysLeft => playsLeft;
+    public bool HasPlayedThisRound => playsUsedThisRound > 0;
     private void Start()
     {
         restartButton.onClick.AddListener(StartNewRun);
@@ -82,6 +83,7 @@ public class RunManager : MonoBehaviour
 
         chips += chipChange;
         playsLeft--;
+        playsUsedThisRound++;
         messageText.text = message;
 
         if (chips >= targetChips)
@@ -99,6 +101,12 @@ public class RunManager : MonoBehaviour
     public void ShowMessage(string message)
     {
         messageText.text = message;
+    }
+
+    public void SpendPlays(int amount)
+    {
+        playsLeft = Mathf.Max(0, playsLeft - amount);
+        UpdateUI();
     }
 
     public int GetCurrentBet()
@@ -125,7 +133,7 @@ public class RunManager : MonoBehaviour
     {
         roundNumber = number;
         playsLeft = playsPerRound + GetUpgradeTotal(UpgradeType.ExtraGuesses);
-
+        playsUsedThisRound = 0;
         int chipsToEarn = baseRoundGoal + goalIncreasePerRound * (number - 1);
         targetChips = chips + chipsToEarn;
 
