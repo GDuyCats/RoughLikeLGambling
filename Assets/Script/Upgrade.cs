@@ -10,7 +10,7 @@ public enum UpgradeType
     LossReduction,
     WinPayoutPercent,
     BetIncrease,
-    ExtraBetLevel 
+    ExtraBetLevel
 }
 
 // How rare an upgrade is. Rarer upgrades appear less often.
@@ -31,9 +31,13 @@ public class Upgrade : ScriptableObject
     [SerializeField] private int value;
     [SerializeField] private UpgradeRarity rarity;
 
+    // If true, each extra copy of this upgrade is worth less than the previous one
+    [SerializeField] private bool diminishingStacks = true;
+
     public string DisplayName => displayName;
     public string Description => description;
     public UpgradeType Type => type;
     public int Value => value;
     public UpgradeRarity Rarity => rarity;
+    public bool HasDiminishingStacks => diminishingStacks;
 }

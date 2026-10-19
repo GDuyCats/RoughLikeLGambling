@@ -13,6 +13,8 @@ MonoBehaviour:
   m_Name: High Roller
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
   displayName: High Roller
-  description: 'Bet +5 chips: bigger wins, bigger losses'
+  description: Base bet +5 chips (multiplied by your bet level)
   type: 6
   value: 5
+  rarity: 0
+  diminishingStacks: 1

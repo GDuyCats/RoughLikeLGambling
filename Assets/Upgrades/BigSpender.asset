@@ -12,8 +12,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fa69e484cc793d94e80522053b8bdb7a, type: 3}
   m_Name: BigSpender
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
-  displayName: 
-  description: 
-  type: 0
-  value: 0
-  rarity: 0
+  displayName: Big Spender
+  description: Unlock one more bet level
+  type: 7
+  value: 1
+  rarity: 1
+  diminishingStacks: 0

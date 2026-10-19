@@ -14,6 +14,7 @@ public class RunManager : MonoBehaviour
     [SerializeField] private TMP_Text roundText;
     [SerializeField] private TMP_Text messageText;
     [SerializeField] private TMP_Text ownedUpgradesText;
+    [SerializeField] private TMP_Text statsText;
     [SerializeField] private Button restartButton;
     [SerializeField] private Button betDownButton;
     [SerializeField] private Button betUpButton;
@@ -39,7 +40,7 @@ public class RunManager : MonoBehaviour
     [SerializeField] private int baseRoundGoal = 20;
     [SerializeField] private int goalIncreasePerRound = 10;
     [SerializeField] private int upgradeChoices = 3;
-
+    [SerializeField, Range(0f, 1f)] private float stackFalloff = 0.5f;   // Each extra copy is worth this much of the previous copy
     // Events let minigames react without RunManager knowing which minigame is running
     public event Action RunStarted;     // A new run has begun
     public event Action StateChanged;   // Chips, bet, round or upgrades changed
@@ -172,14 +173,39 @@ public class RunManager : MonoBehaviour
 
     public int GetUpgradeTotal(UpgradeType type)
     {
-        int total = 0;
+        float total = 0f;
+        List<Upgrade> counted = new List<Upgrade>();
 
         foreach (Upgrade upgrade in ownedUpgrades)
         {
-            if (upgrade.Type == type)
+            // Handle each different upgrade once, together with all its copies
+            if (upgrade.Type != type || counted.Contains(upgrade))
             {
-                total += upgrade.Value;
+                continue;
             }
+
+            counted.Add(upgrade);
+            total += GetStackedValue(upgrade, CountOwned(upgrade));
+        }
+
+        return Mathf.RoundToInt(total);
+    }
+
+    // With diminishing stacks: 50 + 25 + 12.5 + ... instead of 50 + 50 + 50
+    private float GetStackedValue(Upgrade upgrade, int copies)
+    {
+        if (!upgrade.HasDiminishingStacks)
+        {
+            return upgrade.Value * copies;
+        }
+
+        float total = 0f;
+        float copyValue = upgrade.Value;
+
+        for (int i = 0; i < copies; i++)
+        {
+            total += copyValue;
+            copyValue *= stackFalloff;
         }
 
         return total;
@@ -234,7 +260,7 @@ public class RunManager : MonoBehaviour
             Upgrade choice = offered[i];
             button.gameObject.SetActive(true);
             button.GetComponentInChildren<TMP_Text>().text =
-                $"<b>{choice.DisplayName}</b>\n<size=70%>{choice.Rarity}</size>\n\n{choice.Description}";
+    $"<b>{choice.DisplayName}</b>\n<size=70%>{choice.Rarity}</size>\n\n{choice.Description}{BuildStackHint(choice)}";
             button.image.color = GetRarityColor(choice.Rarity);
 
             button.onClick.RemoveAllListeners();
@@ -360,6 +386,72 @@ public class RunManager : MonoBehaviour
         return text;
     }
 
+
+    // Shows how much the next copy of an upgrade is worth, e.g. "Owned x1. Next copy: +25%"
+    private string BuildStackHint(Upgrade upgrade)
+    {
+        int owned = CountOwned(upgrade);
+
+        if (owned == 0)
+        {
+            return "";
+        }
+
+        float nextValue = GetStackedValue(upgrade, owned + 1) - GetStackedValue(upgrade, owned);
+        return $"\n<size=70%>Owned x{owned}. Next copy: +{nextValue:0.#}{GetUnitSuffix(upgrade.Type)}</size>";
+    }
+
+    private string GetUnitSuffix(UpgradeType type)
+    {
+        return type switch
+        {
+            UpgradeType.WinPayoutPercent or UpgradeType.RoundEndInterest => "%",
+            UpgradeType.ExtraGuesses => " plays",
+            UpgradeType.ExtraBetLevel => " bet level",
+            _ => " chips"
+        };
+    }
+
+    // A summary of the player's current numbers. Bonuses at 0 are hidden.
+    private string BuildStatsText()
+    {
+        string text = "Stats:";
+        text += $"\nBet: {GetCurrentBet()} (x{betLevel} of x{MaxBetLevel})";
+        text += $"\nPlays per round: {playsPerRound + GetUpgradeTotal(UpgradeType.ExtraGuesses)}";
+
+        int winPercent = GetUpgradeTotal(UpgradeType.WinPayoutPercent);
+        if (winPercent > 0)
+        {
+            text += $"\nWin bonus: +{winPercent}%";
+        }
+
+        int flatWinBonus = GetUpgradeTotal(UpgradeType.BonusChipsPerWin);
+        if (flatWinBonus > 0)
+        {
+            text += $"\nExtra chips per win: +{flatWinBonus}";
+        }
+
+        int lossReduction = GetUpgradeTotal(UpgradeType.LossReduction);
+        if (lossReduction > 0)
+        {
+            text += $"\nLoss reduction: -{lossReduction} chips";
+        }
+
+        int tieReward = GetUpgradeTotal(UpgradeType.TieReward);
+        if (tieReward > 0)
+        {
+            text += $"\nHigh-Low tie reward: +{tieReward} chips";
+        }
+
+        int interest = GetUpgradeTotal(UpgradeType.RoundEndInterest);
+        if (interest > 0)
+        {
+            text += $"\nRound interest: {interest}%";
+        }
+
+        return text;
+    }
+
     private void UpdateUI()
     {
         // If losses pushed chips below the current bet, lower the bet automatically
@@ -371,7 +463,7 @@ public class RunManager : MonoBehaviour
         chipsText.text = $"Chips: {chips}   Bet: {GetCurrentBet()} (x{betLevel})";
         roundText.text = $"Round {roundNumber}  |  Goal: {targetChips}  |  Plays: {playsLeft}";
         ownedUpgradesText.text = BuildOwnedUpgradesText();
-
+        statsText.text = BuildStatsText();
         betDownButton.interactable = CanChangeBet() && betLevel > 1;
         betUpButton.interactable = CanChangeBet()
             && betLevel < MaxBetLevel
