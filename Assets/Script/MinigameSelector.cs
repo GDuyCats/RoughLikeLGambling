@@ -49,24 +49,31 @@ public class MinigameSelector : MonoBehaviour
     }
 
     // A new round: hide every minigame and make the player pick one
+    // Called at the start of every round
     private void StartRoundChoice()
     {
+        // Choices are fixed for the whole round, so reopening the menu can't reroll them
+        offeredThisRound.Clear();
+        offeredThisRound.AddRange(PickRandomEntries(choicesOffered));
+
+        // After round 1, keep the current game. The player can switch for free if they want.
+        if (run.RoundNumber > 1 && currentEntry != null)
+        {
+            run.ShowMessage($"New round! Keep playing {currentEntry.displayName}, or switch games for free.");
+            return;
+        }
+
+        // A new run: hide every minigame and make the player pick one
         foreach (MinigameEntry entry in minigames)
         {
             entry.panel.SetActive(false);
         }
 
         currentEntry = null;
-
-        // Choices are fixed for the whole round, so reopening the menu can't reroll them
-        offeredThisRound.Clear();
-        offeredThisRound.AddRange(PickRandomEntries(choicesOffered));
-
         gameTitleText.text = "Choose a game";
         run.ShowMessage("Pick the game for this round.");
         ShowChoices(false);
     }
-
     // Opened from the SWITCH GAME button during a round
     private void OpenSwitchMenu()
     {
@@ -155,7 +162,7 @@ public class MinigameSelector : MonoBehaviour
     private bool CanSwitch()
     {
         int cost = GetSwitchCost();
-        return currentEntry != null && run.CanPlay && (cost == 0 || run.PlaysLeft > cost);
+        return currentEntry != null && run.CanPlay && !run.IsMinigameBusy && (cost == 0 || run.PlaysLeft > cost);
     }
 
     private void RefreshSwitchButton()

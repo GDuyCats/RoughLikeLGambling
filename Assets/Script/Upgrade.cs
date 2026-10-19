@@ -9,7 +9,8 @@ public enum UpgradeType
     RoundEndInterest,
     LossReduction,
     WinPayoutPercent,
-    BetIncrease
+    BetIncrease,
+    ExtraBetLevel 
 }
 
 // How rare an upgrade is. Rarer upgrades appear less often.

@@ -6,7 +6,7 @@ using UnityEngine.UI;
 // Both System and UnityEngine have a "Random", so we tell C# to use Unity's one
 using Random = UnityEngine.Random;
 
-// Manages everything shared by all minigames: chips, rounds, upgrades, game over
+// Manages everything shared by all minigames: chips, bets, rounds, upgrades, game over
 public class RunManager : MonoBehaviour
 {
     [Header("UI")]
@@ -15,6 +15,8 @@ public class RunManager : MonoBehaviour
     [SerializeField] private TMP_Text messageText;
     [SerializeField] private TMP_Text ownedUpgradesText;
     [SerializeField] private Button restartButton;
+    [SerializeField] private Button betDownButton;
+    [SerializeField] private Button betUpButton;
 
     [Header("Upgrade Screen")]
     [SerializeField] private GameObject upgradePanel;
@@ -32,6 +34,7 @@ public class RunManager : MonoBehaviour
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
     [SerializeField] private int betAmount = 10;
+    [SerializeField] private int startingMaxBetLevel = 3;   // Bet levels available without upgrades (x1, x2, x3)
     [SerializeField] private int playsPerRound = 12;
     [SerializeField] private int baseRoundGoal = 20;
     [SerializeField] private int goalIncreasePerRound = 10;
@@ -39,23 +42,36 @@ public class RunManager : MonoBehaviour
 
     // Events let minigames react without RunManager knowing which minigame is running
     public event Action RunStarted;     // A new run has begun
-    public event Action StateChanged;   // Chips, round or upgrades changed
-    public event Action RoundStarted;
+    public event Action StateChanged;   // Chips, bet, round or upgrades changed
+    public event Action RoundStarted;   // A new round has begun
+
     private readonly List<Upgrade> ownedUpgrades = new List<Upgrade>();
 
     private int chips;
     private int roundNumber;
     private int targetChips;
     private int playsLeft;
-    private bool isGameOver;
     private int playsUsedThisRound;
-    // Minigames check this before letting the player act
+    private int betLevel = 1;
+    private bool isGameOver;
+
     public bool CanPlay => !isGameOver && !upgradePanel.activeSelf;
     public int PlaysLeft => playsLeft;
+    public int RoundNumber => roundNumber;
+    public int Chips => chips;
+    public int BetLevel => betLevel;
+    public int MaxBetLevel => startingMaxBetLevel + GetUpgradeTotal(UpgradeType.ExtraBetLevel);
     public bool HasPlayedThisRound => playsUsedThisRound > 0;
+
+    // True while a minigame is in the middle of a play (e.g. a blackjack hand)
+    public bool IsMinigameBusy { get; private set; }
+
     private void Start()
     {
         restartButton.onClick.AddListener(StartNewRun);
+        betDownButton.onClick.AddListener(() => ChangeBetLevel(-1));
+        betUpButton.onClick.AddListener(() => ChangeBetLevel(1));
+
         StartNewRun();
     }
 
@@ -63,13 +79,21 @@ public class RunManager : MonoBehaviour
     {
         chips = startingChips;
         ownedUpgrades.Clear();
+        betLevel = 1;
         isGameOver = false;
+        IsMinigameBusy = false;
 
         upgradePanel.SetActive(false);
         restartButton.gameObject.SetActive(false);
 
         StartRound(1);
         RunStarted?.Invoke();
+        UpdateUI();
+    }
+
+    public void SetMinigameBusy(bool busy)
+    {
+        IsMinigameBusy = busy;
         UpdateUI();
     }
 
@@ -103,6 +127,7 @@ public class RunManager : MonoBehaviour
         messageText.text = message;
     }
 
+    // Used when the player pays plays for something, such as switching games
     public void SpendPlays(int amount)
     {
         playsLeft = Mathf.Max(0, playsLeft - amount);
@@ -111,7 +136,38 @@ public class RunManager : MonoBehaviour
 
     public int GetCurrentBet()
     {
-        return betAmount + GetUpgradeTotal(UpgradeType.BetIncrease);
+        return GetBetForLevel(betLevel);
+    }
+
+    // Base bet (plus upgrades) multiplied by the bet level
+    private int GetBetForLevel(int level)
+    {
+        return (betAmount + GetUpgradeTotal(UpgradeType.BetIncrease)) * level;
+    }
+
+    // Bets can't change during a hand or while choosing an upgrade
+    private bool CanChangeBet()
+    {
+        return CanPlay && !IsMinigameBusy;
+    }
+
+    private void ChangeBetLevel(int change)
+    {
+        if (!CanChangeBet())
+        {
+            return;
+        }
+
+        int newLevel = Mathf.Clamp(betLevel + change, 1, MaxBetLevel);
+
+        // Never allow raising the bet above the chips the player has
+        if (change > 0 && GetBetForLevel(newLevel) > chips)
+        {
+            return;
+        }
+
+        betLevel = newLevel;
+        UpdateUI();
     }
 
     public int GetUpgradeTotal(UpgradeType type)
@@ -134,6 +190,7 @@ public class RunManager : MonoBehaviour
         roundNumber = number;
         playsLeft = playsPerRound + GetUpgradeTotal(UpgradeType.ExtraGuesses);
         playsUsedThisRound = 0;
+
         int chipsToEarn = baseRoundGoal + goalIncreasePerRound * (number - 1);
         targetChips = chips + chipsToEarn;
 
@@ -193,7 +250,9 @@ public class RunManager : MonoBehaviour
         upgradePanel.SetActive(false);
 
         StartRound(roundNumber + 1);
-        messageText.text = $"Got {upgrade.DisplayName}!";
+
+        // Keep the new round's message and add the upgrade name in front
+        messageText.text = $"Got {upgrade.DisplayName}!\n{messageText.text}";
         UpdateUI();
     }
 
@@ -303,9 +362,20 @@ public class RunManager : MonoBehaviour
 
     private void UpdateUI()
     {
-        chipsText.text = $"Chips: {chips}   Bet: {GetCurrentBet()}";
+        // If losses pushed chips below the current bet, lower the bet automatically
+        while (betLevel > 1 && GetCurrentBet() > chips)
+        {
+            betLevel--;
+        }
+
+        chipsText.text = $"Chips: {chips}   Bet: {GetCurrentBet()} (x{betLevel})";
         roundText.text = $"Round {roundNumber}  |  Goal: {targetChips}  |  Plays: {playsLeft}";
         ownedUpgradesText.text = BuildOwnedUpgradesText();
+
+        betDownButton.interactable = CanChangeBet() && betLevel > 1;
+        betUpButton.interactable = CanChangeBet()
+            && betLevel < MaxBetLevel
+            && GetBetForLevel(betLevel + 1) <= chips;
 
         // Tell the active minigame to refresh its own UI
         StateChanged?.Invoke();
