@@ -31,6 +31,13 @@ public class HighLowGame : MonoBehaviour
     [SerializeField] private Button[] upgradeButtons;
     [SerializeField] private List<Upgrade> upgradePool;
 
+    [Header("Rarity")]
+    [SerializeField] private int commonWeight = 70;      // Higher weight = appears more often
+    [SerializeField] private int rareWeight = 25;
+    [SerializeField] private int legendaryWeight = 5;
+    [SerializeField] private Color commonColor = new Color(0.85f, 0.85f, 0.85f);
+    [SerializeField] private Color rareColor = new Color(0.55f, 0.75f, 1f);
+    [SerializeField] private Color legendaryColor = new Color(1f, 0.8f, 0.25f);
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
     [SerializeField] private int betAmount = 10;
@@ -245,7 +252,9 @@ public class HighLowGame : MonoBehaviour
 
             Upgrade choice = offered[i];
             button.gameObject.SetActive(true);
-            button.GetComponentInChildren<TMP_Text>().text = $"<b>{choice.DisplayName}</b>\n\n{choice.Description}";
+            button.GetComponentInChildren<TMP_Text>().text =
+     $"<b>{choice.DisplayName}</b>\n<size=70%>{choice.Rarity}</size>\n\n{choice.Description}";
+            button.image.color = GetRarityColor(choice.Rarity);
 
             button.onClick.RemoveAllListeners();
             button.onClick.AddListener(() => ChooseUpgrade(choice));
@@ -264,6 +273,7 @@ public class HighLowGame : MonoBehaviour
         UpdateUI();
     }
 
+    // Pick different upgrades, rarer ones less often
     private List<Upgrade> PickRandomUpgrades(int count)
     {
         List<Upgrade> candidates = new List<Upgrade>(upgradePool);
@@ -271,12 +281,62 @@ public class HighLowGame : MonoBehaviour
 
         while (result.Count < count && candidates.Count > 0)
         {
-            int index = Random.Range(0, candidates.Count);
+            int index = PickWeightedIndex(candidates);
             result.Add(candidates[index]);
             candidates.RemoveAt(index);
         }
 
         return result;
+    }
+
+    // Like drawing a raffle ticket: each upgrade gets as many tickets as its rarity weight
+    private int PickWeightedIndex(List<Upgrade> candidates)
+    {
+        int totalWeight = 0;
+
+        foreach (Upgrade upgrade in candidates)
+        {
+            totalWeight += GetRarityWeight(upgrade.Rarity);
+        }
+
+        if (totalWeight <= 0)
+        {
+            return Random.Range(0, candidates.Count);
+        }
+
+        int roll = Random.Range(0, totalWeight);
+
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            roll -= GetRarityWeight(candidates[i].Rarity);
+
+            if (roll < 0)
+            {
+                return i;
+            }
+        }
+
+        return candidates.Count - 1;
+    }
+
+    private int GetRarityWeight(UpgradeRarity rarity)
+    {
+        return rarity switch
+        {
+            UpgradeRarity.Rare => rareWeight,
+            UpgradeRarity.Legendary => legendaryWeight,
+            _ => commonWeight
+        };
+    }
+
+    private Color GetRarityColor(UpgradeRarity rarity)
+    {
+        return rarity switch
+        {
+            UpgradeRarity.Rare => rareColor,
+            UpgradeRarity.Legendary => legendaryColor,
+            _ => commonColor
+        };
     }
 
     private int GetUpgradeTotal(UpgradeType type)
