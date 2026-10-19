@@ -93,7 +93,7 @@ public class HighLowGame : MonoBehaviour
         else if (isTie)
         {
             chipChange = run.GetUpgradeTotal(UpgradeType.TieReward);
-            message = chipChange > 0 ? $"Tie! +{chipChange} chips" : "Tie! No chips lost.";
+                        message = chipChange > 0 ? $"Same card! +{chipChange} chips" : "Same card! No chips won or lost.";
         }
         else
         {
@@ -114,9 +114,10 @@ public class HighLowGame : MonoBehaviour
 
         currentCard = nextCard;
 
-        if (IsExtremeCard(currentCard))
+        // After a tie or an A/K, deal a fresh card so the table visibly changes
+        if (isTie || IsExtremeCard(currentCard))
         {
-            currentCard = DrawPlayableCard();
+            currentCard = DrawPlayableCardExcept(nextCard);
             message += $"\n{CardName(nextCard)} drawn. Dealing a new card.";
         }
 
@@ -181,6 +182,19 @@ public class HighLowGame : MonoBehaviour
     private int DrawPlayableCard()
     {
         return Random.Range(2, CardCount);
+    }
+
+    // Draw a playable card that is different from the given value
+    private int DrawPlayableCardExcept(int value)
+    {
+        int card = DrawPlayableCard();
+
+        while (card == value)
+        {
+            card = DrawPlayableCard();
+        }
+
+        return card;
     }
 
     private string CardName(int value)
