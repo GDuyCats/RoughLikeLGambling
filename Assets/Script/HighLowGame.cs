@@ -46,16 +46,16 @@ public class HighLowGame : MonoBehaviour
     }
 
     // Start listening to the RunManager's events
+    // Runs every time this minigame is switched on: listen for updates and start fresh
     private void OnEnable()
     {
-        run.RunStarted += ResetGame;
         run.StateChanged += RefreshUI;
+        ResetGame();
     }
 
-    // Stop listening when this object is disabled or destroyed
+    // Stop listening when this minigame is switched off
     private void OnDisable()
     {
-        run.RunStarted -= ResetGame;
         run.StateChanged -= RefreshUI;
     }
 
@@ -93,7 +93,7 @@ public class HighLowGame : MonoBehaviour
         else if (isTie)
         {
             chipChange = run.GetUpgradeTotal(UpgradeType.TieReward);
-                        message = chipChange > 0 ? $"Same card! +{chipChange} chips" : "Same card! No chips won or lost.";
+            message = chipChange > 0 ? $"Same card! +{chipChange} chips" : "Same card! No chips won or lost.";
         }
         else
         {

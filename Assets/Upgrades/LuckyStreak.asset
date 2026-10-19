@@ -16,3 +16,4 @@ MonoBehaviour:
   description: +50% chips on every correct guess
   type: 0
   value: 50
+  rarity: 1

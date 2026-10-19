@@ -16,3 +16,4 @@ MonoBehaviour:
   description: Gain 10% of your chips when you clear a round
   type: 3
   value: 10
+  rarity: 1

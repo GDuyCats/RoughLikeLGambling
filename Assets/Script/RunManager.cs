@@ -40,7 +40,7 @@ public class RunManager : MonoBehaviour
     // Events let minigames react without RunManager knowing which minigame is running
     public event Action RunStarted;     // A new run has begun
     public event Action StateChanged;   // Chips, round or upgrades changed
-
+    public event Action RoundStarted;
     private readonly List<Upgrade> ownedUpgrades = new List<Upgrade>();
 
     private int chips;
@@ -128,6 +128,8 @@ public class RunManager : MonoBehaviour
 
         int chipsToEarn = baseRoundGoal + goalIncreasePerRound * (number - 1);
         targetChips = chips + chipsToEarn;
+
+        RoundStarted?.Invoke();
     }
 
     private void ClearRound()
