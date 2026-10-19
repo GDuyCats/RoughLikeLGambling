@@ -48,6 +48,7 @@ public class DiceGame : MonoBehaviour
     {
         run.StateChanged += RefreshUI;
         ResetGame();
+        RefreshUI();
     }
 
     // Stop listening when this minigame is switched off

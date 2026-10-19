@@ -51,8 +51,8 @@ public class HighLowGame : MonoBehaviour
     {
         run.StateChanged += RefreshUI;
         ResetGame();
+        RefreshUI();
     }
-
     // Stop listening when this minigame is switched off
     private void OnDisable()
     {
