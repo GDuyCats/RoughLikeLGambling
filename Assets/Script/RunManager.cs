@@ -6,15 +6,17 @@ using UnityEngine.UI;
 // Both System and UnityEngine have a "Random", so we tell C# to use Unity's one
 using Random = UnityEngine.Random;
 
-// Manages everything shared by all minigames: chips, bets, rounds, upgrades, game over
+// Manages everything shared by all minigames: chips, bets, rounds, curses, health, the final boss
 public class RunManager : MonoBehaviour
 {
     [Header("UI")]
     [SerializeField] private TMP_Text chipsText;
+    [SerializeField] private TMP_Text healthText;
     [SerializeField] private TMP_Text roundText;
     [SerializeField] private TMP_Text messageText;
     [SerializeField] private TMP_Text ownedUpgradesText;
     [SerializeField] private TMP_Text statsText;
+    [SerializeField] private TMP_Text bossText;
     [SerializeField] private Button restartButton;
     [SerializeField] private Button betDownButton;
     [SerializeField] private Button betUpButton;
@@ -32,21 +34,33 @@ public class RunManager : MonoBehaviour
     [SerializeField] private Color rareColor = new Color(0.55f, 0.75f, 1f);
     [SerializeField] private Color legendaryColor = new Color(1f, 0.8f, 0.25f);
 
+    [Header("Run Structure")]
+    [SerializeField] private int finalRound = 9;
+    [SerializeField] private List<int> curseRounds = new List<int> { 3, 6 };
+    [SerializeField] private List<BossModifier> cursePool;
+
+    [Header("Final Boss")]
+    [SerializeField] private List<FinalBoss> finalBossPool;
+    [SerializeField] private int revealBossFromRound = 7;   // From this round, the player knows who the final boss is
+    [SerializeField] private int playerMaxHealth = 100;
+    [SerializeField] private BossCombat bossCombat;
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
     [SerializeField] private int betAmount = 10;
-    [SerializeField] private int startingMaxBetLevel = 3;   // Bet levels available without upgrades (x1, x2, x3)
+    [SerializeField] private int startingMaxBetLevel = 3;
     [SerializeField] private int playsPerRound = 12;
     [SerializeField] private int baseRoundGoal = 20;
     [SerializeField] private int goalIncreasePerRound = 10;
     [SerializeField] private int upgradeChoices = 3;
-    [SerializeField, Range(0f, 1f)] private float stackFalloff = 0.5f;   // Each extra copy is worth this much of the previous copy
-    // Events let minigames react without RunManager knowing which minigame is running
-    public event Action RunStarted;     // A new run has begun
-    public event Action StateChanged;   // Chips, bet, round or upgrades changed
-    public event Action RoundStarted;   // A new round has begun
+    [SerializeField, Range(0f, 1f)] private float stackFalloff = 0.5f;
+
+    public event Action RunStarted;
+    public event Action StateChanged;
+    public event Action RoundStarted;
 
     private readonly List<Upgrade> ownedUpgrades = new List<Upgrade>();
+
+    private TMP_Text restartButtonText;
 
     private int chips;
     private int roundNumber;
@@ -55,20 +69,34 @@ public class RunManager : MonoBehaviour
     private int playsUsedThisRound;
     private int betLevel = 1;
     private bool isGameOver;
+    private bool isVictory;
 
-    public bool CanPlay => !isGameOver && !upgradePanel.activeSelf;
+    private BossModifier currentCurse;
+    private bool lastRoundWasCurse;
+
+    private FinalBoss finalBoss;   // Chosen at the start of each run
+    private int playerHealth;
+    private int bossHealth;
+    private bool isBossAttacking;
+    public bool CanPlay => !isGameOver && !upgradePanel.activeSelf && !isBossAttacking;
     public int PlaysLeft => playsLeft;
     public int RoundNumber => roundNumber;
     public int Chips => chips;
     public int BetLevel => betLevel;
     public int MaxBetLevel => startingMaxBetLevel + GetUpgradeTotal(UpgradeType.ExtraBetLevel);
     public bool HasPlayedThisRound => playsUsedThisRound > 0;
+    public bool IsCurseRound => currentCurse != null;
+    public bool IsFinalRound => roundNumber == finalRound;
+    public FinalBoss FinalBoss => finalBoss;
+    public bool IsBossFight => IsFinalRound && finalBoss != null;
+    public bool IsBossRevealed => roundNumber >= revealBossFromRound;
 
-    // True while a minigame is in the middle of a play (e.g. a blackjack hand)
     public bool IsMinigameBusy { get; private set; }
 
     private void Start()
     {
+        restartButtonText = restartButton.GetComponentInChildren<TMP_Text>();
+
         restartButton.onClick.AddListener(StartNewRun);
         betDownButton.onClick.AddListener(() => ChangeBetLevel(-1));
         betUpButton.onClick.AddListener(() => ChangeBetLevel(1));
@@ -79,16 +107,26 @@ public class RunManager : MonoBehaviour
     public void StartNewRun()
     {
         chips = startingChips;
+        playerHealth = playerMaxHealth;
         ownedUpgrades.Clear();
         betLevel = 1;
         isGameOver = false;
+        isVictory = false;
         IsMinigameBusy = false;
+        lastRoundWasCurse = false;
+        isBossAttacking = false;
+
+        if (bossCombat != null)
+        {
+            bossCombat.CancelAttack();
+        }
+        finalBoss = finalBossPool.Count > 0 ? finalBossPool[Random.Range(0, finalBossPool.Count)] : null;
 
         upgradePanel.SetActive(false);
         restartButton.gameObject.SetActive(false);
-
-        StartRound(1);
         RunStarted?.Invoke();
+        StartRound(1);
+        // RunStarted?.Invoke();
         UpdateUI();
     }
 
@@ -98,11 +136,16 @@ public class RunManager : MonoBehaviour
         UpdateUI();
     }
 
-    // Called by a minigame after each play. chipChange is negative for a loss.
     public void FinishPlay(int chipChange, string message)
     {
         if (!CanPlay)
         {
+            return;
+        }
+
+        if (IsBossFight)
+        {
+            HandleBossPlay(chipChange, message);
             return;
         }
 
@@ -123,12 +166,71 @@ public class RunManager : MonoBehaviour
         UpdateUI();
     }
 
+    // In the boss fight, wins damage the boss and losses damage the player instead of costing chips
+    // In the boss fight, wins damage the boss and losses make the boss attack
+    private void HandleBossPlay(int chipChange, string message)
+    {
+        playsUsedThisRound++;
+
+        // A lost hand: the boss attacks, and the player can try to parry
+        if (chipChange < 0 && bossCombat != null)
+        {
+            isBossAttacking = true;
+            messageText.text = message + $"\n{finalBoss.DisplayName} attacks! RIGHT-CLICK to parry!";
+            bossCombat.StartAttack(-chipChange, FinishBossAttack);
+            UpdateUI();
+            return;
+        }
+
+        if (chipChange > 0)
+        {
+            bossHealth = Mathf.Max(0, bossHealth - chipChange);
+            message += $"\nYou hit {finalBoss.DisplayName} for {chipChange} damage!";
+        }
+        else if (chipChange < 0)
+        {
+            // Only used if no BossCombat is assigned
+            int damage = -chipChange;
+            playerHealth = Mathf.Max(0, playerHealth - damage);
+            message += $"\n{finalBoss.DisplayName} hits you for {damage} damage!";
+        }
+        else
+        {
+            message += "\nNo damage this time.";
+        }
+
+        messageText.text = message;
+        CheckBossFightEnd();
+        UpdateUI();
+    }
+
+    // Called by BossCombat when the boss's attack is over
+    private void FinishBossAttack(int damageTaken, string resultText)
+    {
+        isBossAttacking = false;
+        playerHealth = Mathf.Max(0, playerHealth - damageTaken);
+        messageText.text = resultText;
+
+        CheckBossFightEnd();
+        UpdateUI();
+    }
+
+    private void CheckBossFightEnd()
+    {
+        if (bossHealth <= 0)
+        {
+            Victory();
+        }
+        else if (playerHealth <= 0)
+        {
+            GameOver();
+        }
+    }
     public void ShowMessage(string message)
     {
         messageText.text = message;
     }
 
-    // Used when the player pays plays for something, such as switching games
     public void SpendPlays(int amount)
     {
         playsLeft = Mathf.Max(0, playsLeft - amount);
@@ -140,13 +242,11 @@ public class RunManager : MonoBehaviour
         return GetBetForLevel(betLevel);
     }
 
-    // Base bet (plus upgrades) multiplied by the bet level
     private int GetBetForLevel(int level)
     {
         return (betAmount + GetUpgradeTotal(UpgradeType.BetIncrease)) * level;
     }
 
-    // Bets can't change during a hand or while choosing an upgrade
     private bool CanChangeBet()
     {
         return CanPlay && !IsMinigameBusy;
@@ -161,7 +261,6 @@ public class RunManager : MonoBehaviour
 
         int newLevel = Mathf.Clamp(betLevel + change, 1, MaxBetLevel);
 
-        // Never allow raising the bet above the chips the player has
         if (change > 0 && GetBetForLevel(newLevel) > chips)
         {
             return;
@@ -171,6 +270,11 @@ public class RunManager : MonoBehaviour
         UpdateUI();
     }
 
+    public int GetBossValue(BossEffect effect)
+    {
+        return currentCurse != null && currentCurse.Effect == effect ? currentCurse.Value : 0;
+    }
+
     public int GetUpgradeTotal(UpgradeType type)
     {
         float total = 0f;
@@ -178,7 +282,6 @@ public class RunManager : MonoBehaviour
 
         foreach (Upgrade upgrade in ownedUpgrades)
         {
-            // Handle each different upgrade once, together with all its copies
             if (upgrade.Type != type || counted.Contains(upgrade))
             {
                 continue;
@@ -191,7 +294,6 @@ public class RunManager : MonoBehaviour
         return Mathf.RoundToInt(total);
     }
 
-    // With diminishing stacks: 50 + 25 + 12.5 + ... instead of 50 + 50 + 50
     private float GetStackedValue(Upgrade upgrade, int copies)
     {
         if (!upgrade.HasDiminishingStacks)
@@ -214,32 +316,87 @@ public class RunManager : MonoBehaviour
     private void StartRound(int number)
     {
         roundNumber = number;
-        playsLeft = playsPerRound + GetUpgradeTotal(UpgradeType.ExtraGuesses);
+        currentCurse = PickCurseForRound(number);
+
+        int plays = playsPerRound + GetUpgradeTotal(UpgradeType.ExtraGuesses) - GetBossValue(BossEffect.FewerPlays);
+        playsLeft = Mathf.Max(1, plays);
         playsUsedThisRound = 0;
 
         int chipsToEarn = baseRoundGoal + goalIncreasePerRound * (number - 1);
+        chipsToEarn = Mathf.RoundToInt(chipsToEarn * (100 + GetBossValue(BossEffect.GoalIncreasePercent)) / 100f);
         targetChips = chips + chipsToEarn;
+
+        if (IsBossFight)
+        {
+            bossHealth = finalBoss.MaxHealth;
+        }
 
         RoundStarted?.Invoke();
     }
 
+    private BossModifier PickCurseForRound(int number)
+    {
+        if (!curseRounds.Contains(number) || number == finalRound || cursePool.Count == 0)
+        {
+            return null;
+        }
+
+        return cursePool[Random.Range(0, cursePool.Count)];
+    }
+
     private void ClearRound()
     {
+        if (IsFinalRound)
+        {
+            Victory();
+            return;
+        }
+
+        lastRoundWasCurse = currentCurse != null;
+
         int interestPercent = GetUpgradeTotal(UpgradeType.RoundEndInterest);
         int interest = chips * interestPercent / 100;
         chips += interest;
 
-        messageText.text += interest > 0
-            ? $"\nRound {roundNumber} cleared! +{interest} interest"
+        string clearText = lastRoundWasCurse
+            ? $"\nCurse of {currentCurse.DisplayName} lifted! Pick a rare reward."
             : $"\nRound {roundNumber} cleared!";
 
+        if (interest > 0)
+        {
+            clearText += $" +{interest} interest";
+        }
+
+        messageText.text += clearText;
         ShowUpgradeChoices();
+    }
+
+    private void Victory()
+    {
+        isGameOver = true;
+        isVictory = true;
+
+        if (finalBoss != null)
+        {
+            chips += finalBoss.Jackpot;
+            messageText.text += $"\n<color=#FFD54F>YOU WIN! {finalBoss.DisplayName} is defeated! Jackpot +{finalBoss.Jackpot} chips!</color>";
+        }
+        else
+        {
+            messageText.text += $"\n<color=#FFD54F>YOU WIN! You finished the run with {chips} chips.</color>";
+        }
+
+        restartButton.gameObject.SetActive(true);
     }
 
     private void GameOver()
     {
         isGameOver = true;
-        messageText.text += $"\nGame over! You reached round {roundNumber}.";
+
+        messageText.text += playerHealth <= 0
+            ? $"\nYou were knocked out by {finalBoss.DisplayName}!"
+            : $"\nGame over! You reached round {roundNumber} of {finalRound}.";
+
         restartButton.gameObject.SetActive(true);
     }
 
@@ -260,7 +417,7 @@ public class RunManager : MonoBehaviour
             Upgrade choice = offered[i];
             button.gameObject.SetActive(true);
             button.GetComponentInChildren<TMP_Text>().text =
-    $"<b>{choice.DisplayName}</b>\n<size=70%>{choice.Rarity}</size>\n\n{choice.Description}{BuildStackHint(choice)}";
+                $"<b>{choice.DisplayName}</b>\n<size=70%>{choice.Rarity}</size>\n\n{choice.Description}{BuildStackHint(choice)}";
             button.image.color = GetRarityColor(choice.Rarity);
 
             button.onClick.RemoveAllListeners();
@@ -277,14 +434,27 @@ public class RunManager : MonoBehaviour
 
         StartRound(roundNumber + 1);
 
-        // Keep the new round's message and add the upgrade name in front
         messageText.text = $"Got {upgrade.DisplayName}!\n{messageText.text}";
         UpdateUI();
     }
 
     private List<Upgrade> PickRandomUpgrades(int count)
     {
-        List<Upgrade> candidates = new List<Upgrade>(upgradePool);
+        List<Upgrade> candidates = new List<Upgrade>();
+
+        foreach (Upgrade upgrade in upgradePool)
+        {
+            if (!lastRoundWasCurse || upgrade.Rarity != UpgradeRarity.Common)
+            {
+                candidates.Add(upgrade);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            candidates.AddRange(upgradePool);
+        }
+
         List<Upgrade> result = new List<Upgrade>();
 
         while (result.Count < count && candidates.Count > 0)
@@ -386,8 +556,6 @@ public class RunManager : MonoBehaviour
         return text;
     }
 
-
-    // Shows how much the next copy of an upgrade is worth, e.g. "Owned x1. Next copy: +25%"
     private string BuildStackHint(Upgrade upgrade)
     {
         int owned = CountOwned(upgrade);
@@ -412,7 +580,21 @@ public class RunManager : MonoBehaviour
         };
     }
 
-    // A summary of the player's current numbers. Bonuses at 0 are hidden.
+    private int GetNextCurseRound()
+    {
+        int next = -1;
+
+        foreach (int round in curseRounds)
+        {
+            if (round >= roundNumber && round < finalRound && (next < 0 || round < next))
+            {
+                next = round;
+            }
+        }
+
+        return next;
+    }
+
     private string BuildStatsText()
     {
         string text = "Stats:";
@@ -449,27 +631,83 @@ public class RunManager : MonoBehaviour
             text += $"\nRound interest: {interest}%";
         }
 
+        if (IsBossFight)
+        {
+            text += "\n<color=#FFD54F>Final boss fight!</color>";
+        }
+        else if (IsCurseRound)
+        {
+            text += "\n<color=#FF6B6B>Curse round now!</color>";
+        }
+        else
+        {
+            int nextCurse = GetNextCurseRound();
+
+            if (nextCurse > 0 && cursePool.Count > 0)
+            {
+                text += $"\nNext curse: round {nextCurse}";
+            }
+
+            // Reveal the final boss and its favorite game a few rounds early
+            if (finalBoss != null && IsBossRevealed)
+            {
+                text += $"\nFinal boss: {finalBoss.DisplayName} ({FinalBoss.GetGameName(finalBoss.FavoriteGame)}) at round {finalRound}";
+            }
+            else
+            {
+                text += $"\nFinal boss: round {finalRound} (revealed at round {revealBossFromRound})";
+            }
+        }
+
         return text;
     }
 
     private void UpdateUI()
     {
-        // If losses pushed chips below the current bet, lower the bet automatically
         while (betLevel > 1 && GetCurrentBet() > chips)
         {
             betLevel--;
         }
 
         chipsText.text = $"Chips: {chips}   Bet: {GetCurrentBet()} (x{betLevel})";
-        roundText.text = $"Round {roundNumber}  |  Goal: {targetChips}  |  Plays: {playsLeft}";
+        healthText.text = $"HP: {playerHealth}/{playerMaxHealth}";
+
+        if (IsBossFight)
+        {
+            roundText.text = $"Round {roundNumber}/{finalRound}  (FINAL BOSS)  |  Boss HP: {bossHealth}/{finalBoss.MaxHealth}";
+        }
+        else
+        {
+            string roundTag = IsCurseRound ? "  (CURSE)" : "";
+            roundText.text = $"Round {roundNumber}/{finalRound}{roundTag}  |  Goal: {targetChips}  |  Plays: {playsLeft}";
+        }
+
         ownedUpgradesText.text = BuildOwnedUpgradesText();
         statsText.text = BuildStatsText();
+
+        bossText.gameObject.SetActive(IsCurseRound || IsFinalRound);
+
+        if (IsBossFight)
+        {
+            bossText.text = $"<color=#FFD54F>FINAL BOSS: {finalBoss.DisplayName}</color>   HP {bossHealth}/{finalBoss.MaxHealth}\n"
+                + "<size=80%>Wins deal damage. Losses hurt you instead of costing chips.</size>";
+        }
+        else if (IsFinalRound)
+        {
+            bossText.text = "<color=#FFD54F>FINAL ROUND</color>\n<size=80%>Clear this round to win the run!</size>";
+        }
+        else if (IsCurseRound)
+        {
+            bossText.text = $"CURSE: {currentCurse.DisplayName}\n<size=80%>{currentCurse.Description}</size>";
+        }
+
+        restartButtonText.text = isVictory ? "PLAY AGAIN" : "RESTART";
+
         betDownButton.interactable = CanChangeBet() && betLevel > 1;
         betUpButton.interactable = CanChangeBet()
             && betLevel < MaxBetLevel
             && GetBetForLevel(betLevel + 1) <= chips;
 
-        // Tell the active minigame to refresh its own UI
         StateChanged?.Invoke();
     }
 }

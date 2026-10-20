@@ -1,23 +1,26 @@
 using UnityEngine;
 
-// Put this on a table in the casino. It links the table to its minigame and camera.
+// Put this on a table in the casino. It links the table to its minigame, camera and boss spot.
 [RequireComponent(typeof(Collider))]
 public class TableStation : MonoBehaviour
 {
     [SerializeField] private string displayName;
-    [SerializeField] private GameObject minigamePanel;   // The minigame UI for this table
-    [SerializeField] private GameObject tableCamera;     // The Cinemachine camera that zooms into this table
+    [SerializeField] private MinigameType minigame;
+    [SerializeField] private GameObject minigamePanel;
+    [SerializeField] private GameObject tableCamera;
+    [SerializeField] private Transform bossSpot;   // Where the final boss stands at this table
 
     private Collider tableCollider;
 
     public string DisplayName => displayName;
+    public MinigameType Minigame => minigame;
+    public Transform BossSpot => bossSpot;
 
     private void Awake()
     {
         tableCollider = GetComponent<Collider>();
     }
 
-    // Distance across the floor from a position to the nearest edge of this table
     public float DistanceTo(Vector3 position)
     {
         Vector3 closestPoint = tableCollider.ClosestPoint(position);
@@ -25,7 +28,6 @@ public class TableStation : MonoBehaviour
         return Vector3.Distance(position, closestPoint);
     }
 
-    // Opening the table shows its minigame and zooms the camera in
     public void SetOpen(bool open)
     {
         minigamePanel.SetActive(open);
