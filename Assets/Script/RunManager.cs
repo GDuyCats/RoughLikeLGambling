@@ -205,11 +205,14 @@ public class RunManager : MonoBehaviour
     }
 
     // Called by BossCombat when the boss's attack is over
-    private void FinishBossAttack(int damageTaken, string resultText)
+    private void FinishBossAttack(AttackOutcome outcome)
     {
         isBossAttacking = false;
-        playerHealth = Mathf.Max(0, playerHealth - damageTaken);
-        messageText.text = resultText;
+
+        // Healing can never go above max health
+        playerHealth = Mathf.Clamp(playerHealth - outcome.DamageTaken + outcome.HealAmount, 0, playerMaxHealth);
+        bossHealth = Mathf.Max(0, bossHealth - outcome.BossDamage);
+        messageText.text = outcome.Message;
 
         CheckBossFightEnd();
         UpdateUI();

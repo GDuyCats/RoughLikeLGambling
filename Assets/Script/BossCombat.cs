@@ -5,41 +5,68 @@ using UnityEngine.InputSystem;
 // Both System and UnityEngine have a "Random", so we tell C# to use Unity's one
 using Random = UnityEngine.Random;
 
-// Plays the final boss's attacks and checks if the player parries them with right click
+// Everything that happened in one boss attack, sent back to the RunManager
+public struct AttackOutcome
+{
+    public int DamageTaken;   // Damage the player takes
+    public int BossDamage;    // Damage dealt back to the boss (reflect or counter)
+    public int HealAmount;    // Health the player gets back
+    public string Message;
+}
+
+// Plays the final boss's attacks and checks the player's parry (right mouse button).
+// Like Street Fighter 6: press at the moment of impact for a perfect parry, hold to block.
 public class BossCombat : MonoBehaviour
 {
     [Header("Scene")]
     [SerializeField] private Transform bossModel;
+    [SerializeField] private Renderer bossRenderer;
     [SerializeField] private Transform player;
-    [SerializeField] private GameObject projectile;          // A small sphere, hidden when not in use
-    [SerializeField] private GameObject parryCue;            // UI: a target circle and a shrinking ring
+    [SerializeField] private GameObject projectile;
+    [SerializeField] private GameObject parryCue;
     [SerializeField] private RectTransform shrinkingRing;
 
     [Header("Attacks")]
-    [SerializeField, Range(0f, 1f)] private float projectileChance = 0.5f;   // The rest are melee strikes
-    [SerializeField] private float projectileMinTime = 0.7f;                 // Projectile flight time (seconds)
+    [SerializeField, Range(0f, 1f)] private float projectileChance = 0.5f;
+    [SerializeField] private float projectileMinTime = 0.7f;
     [SerializeField] private float projectileMaxTime = 1.1f;
-    [SerializeField] private float meleeMinWindup = 0.5f;                    // Random wind-up makes strikes harder to read
+    [SerializeField] private float meleeMinWindup = 0.5f;
     [SerializeField] private float meleeMaxWindup = 1.2f;
     [SerializeField] private float meleeLungeTime = 0.2f;
-    [SerializeField, Range(0f, 1f)] private float meleeLungeDistance = 0.6f; // How far the boss lunges toward the player
+    [SerializeField, Range(0f, 1f)] private float meleeLungeDistance = 0.6f;
+    [SerializeField, Range(0f, 0.5f)] private float meleeShakeAmount = 0.15f;
+    [SerializeField] private Color windupColor = Color.white;
 
-    [Header("Parry Windows (seconds)")]
-    [SerializeField] private float perfectWindow = 0.08f;   // Within this time of impact: perfect parry
-    [SerializeField] private float normalWindow = 0.3f;     // Earlier than this: too early
+    [Header("Parry")]
+    [SerializeField] private float perfectWindow = 0.08f;   // Pressing parry within this time of impact: perfect parry
     [SerializeField] private float ringStartScale = 3f;
+    [SerializeField] private bool showTimingCue = true;
+
+    [Header("Perfect Parry Rewards")]
+    [SerializeField, Range(0f, 3f)] private float reflectDamageMultiplier = 1f;
+    [SerializeField, Range(0f, 1f)] private float reflectHealPercent = 0.5f;
+    [SerializeField, Range(0f, 3f)] private float counterDamageMultiplier = 1.5f;
+    [SerializeField] private float reflectFlightTime = 0.3f;
+    [SerializeField] private float knockbackDistance = 0.8f;
+    [SerializeField] private float knockbackTime = 0.25f;
+    [SerializeField] private Color hitFlashColor = Color.yellow;
 
     private Coroutine attackRoutine;
+    private Color bossOriginalColor;
 
     public bool IsAttacking { get; private set; }
 
     private void Awake()
     {
+        if (bossRenderer != null)
+        {
+            bossOriginalColor = bossRenderer.material.color;
+        }
+
         HideVisuals();
     }
 
-    // onFinished receives the damage the player actually takes and a result message
-    public void StartAttack(int damage, Action<int, string> onFinished)
+    public void StartAttack(int damage, Action<AttackOutcome> onFinished)
     {
         CancelAttack();
         attackRoutine = StartCoroutine(AttackRoutine(damage, onFinished));
@@ -47,17 +74,14 @@ public class BossCombat : MonoBehaviour
 
     public void CancelAttack()
     {
-        if (attackRoutine != null)
-        {
-            StopCoroutine(attackRoutine);
-            attackRoutine = null;
-        }
-
+        StopAllCoroutines();
+        attackRoutine = null;
         IsAttacking = false;
+        ResetBossColor();
         HideVisuals();
     }
 
-    private IEnumerator AttackRoutine(int damage, Action<int, string> onFinished)
+    private IEnumerator AttackRoutine(int damage, Action<AttackOutcome> onFinished)
     {
         IsAttacking = true;
 
@@ -74,11 +98,11 @@ public class BossCombat : MonoBehaviour
         Vector3 bossStartScale = bossModel.localScale;
         Vector3 target = player.position;
 
-        float? parryTime = null;   // When the player pressed parry (null = not yet)
-        bool pressedTooEarly = false;
+        float? firstPressTime = null;   // Only the first press can be a perfect parry, so mashing doesn't work
+        bool heldAtImpact = false;      // Was the parry button held down when the attack landed?
+        bool impactChecked = false;
 
-        // Only projectiles show the timing ring. Melee strikes must be read from the boss's movement.
-        parryCue.SetActive(isProjectile);
+        parryCue.SetActive(isProjectile && showTimingCue);
         projectile.SetActive(isProjectile);
 
         while (Time.time < endTime)
@@ -95,80 +119,153 @@ public class BossCombat : MonoBehaviour
                 AnimateMelee(bossStartPosition, bossStartScale, target, impactTime);
             }
 
-            if (parryTime == null && !pressedTooEarly && WasParryPressed())
+            if (firstPressTime == null && WasParryPressed())
             {
-                // Pressing way too early locks you out of parrying this attack
-                if (Time.time - impactTime < -normalWindow)
-                {
-                    pressedTooEarly = true;
-                }
-                else
-                {
-                    parryTime = Time.time;
-                }
+                firstPressTime = Time.time;
             }
 
-            // Wait for the next frame, then continue the loop
+            // At the moment of impact, check if the player is holding parry to block
+            if (!impactChecked && Time.time >= impactTime)
+            {
+                impactChecked = true;
+                heldAtImpact = IsParryHeld();
+            }
+
             yield return null;
         }
 
         bossModel.position = bossStartPosition;
         bossModel.localScale = bossStartScale;
-        HideVisuals();
+        ResetBossColor();
+        parryCue.SetActive(false);
 
+        bool isPerfect = firstPressTime.HasValue && Mathf.Abs(firstPressTime.Value - impactTime) <= perfectWindow;
         string attackName = isProjectile ? "projectile" : "strike";
-        int damageTaken;
-        string result;
+        AttackOutcome outcome = new AttackOutcome();
 
-        if (parryTime.HasValue && Mathf.Abs(parryTime.Value - impactTime) <= perfectWindow)
+        if (isPerfect && isProjectile)
         {
-            damageTaken = 0;
-            result = $"PERFECT PARRY! You stopped the {attackName}.";
+            yield return ReflectProjectile(target, bossStartPosition);
+
+            outcome.BossDamage = Mathf.Max(1, Mathf.RoundToInt(damage * reflectDamageMultiplier));
+            outcome.HealAmount = Mathf.RoundToInt(damage * reflectHealPercent);
+            outcome.Message = $"PERFECT PARRY! Reflected for {outcome.BossDamage} damage and healed {outcome.HealAmount} HP!";
         }
-        else if (parryTime.HasValue)
+        else if (isPerfect)
         {
-            damageTaken = Mathf.CeilToInt(damage / 2f);
-            result = $"Blocked! The {attackName} deals {damageTaken} damage.";
+            yield return Knockback(bossStartPosition, target);
+
+            outcome.BossDamage = Mathf.Max(1, Mathf.RoundToInt(damage * counterDamageMultiplier));
+            outcome.Message = $"PERFECT PARRY! Your counterattack deals {outcome.BossDamage} damage!";
         }
-        else if (pressedTooEarly)
+        else if (heldAtImpact)
         {
-            damageTaken = damage;
-            result = $"Too early! The {attackName} hits you for {damage} damage.";
+            outcome.DamageTaken = Mathf.CeilToInt(damage / 2f);
+            outcome.Message = $"Blocked! The {attackName} deals {outcome.DamageTaken} damage.";
         }
         else
         {
-            damageTaken = damage;
-            result = $"The {attackName} hits you for {damage} damage!";
+            outcome.DamageTaken = damage;
+            outcome.Message = $"The {attackName} hits you for {damage} damage!";
         }
 
+        HideVisuals();
         IsAttacking = false;
         attackRoutine = null;
-        onFinished?.Invoke(damageTaken, result);
+        onFinished?.Invoke(outcome);
     }
 
-    // Wind-up: the boss shakes. Then it lunges toward the player right before impact.
     private void AnimateMelee(Vector3 startPosition, Vector3 startScale, Vector3 target, float impactTime)
     {
         float lungeStartTime = impactTime - meleeLungeTime;
 
         if (Time.time < lungeStartTime)
         {
-            float shake = 1f + 0.08f * Mathf.Sin(Time.time * 30f);
+            float shake = 1f + meleeShakeAmount * Mathf.Sin(Time.time * 30f);
             bossModel.localScale = startScale * shake;
             bossModel.position = startPosition;
+
+            bool flashOn = Mathf.Sin(Time.time * 20f) > 0f;
+            SetBossColor(flashOn ? windupColor : bossOriginalColor);
         }
         else
         {
             bossModel.localScale = startScale;
+            SetBossColor(windupColor);
+
             float lungeProgress = Mathf.Clamp01((Time.time - lungeStartTime) / meleeLungeTime);
             Vector3 lungeEnd = Vector3.Lerp(startPosition, target, meleeLungeDistance);
             bossModel.position = Vector3.Lerp(startPosition, lungeEnd, lungeProgress);
         }
     }
 
+    private IEnumerator ReflectProjectile(Vector3 from, Vector3 to)
+    {
+        projectile.SetActive(true);
+        float startTime = Time.time;
+
+        while (Time.time < startTime + reflectFlightTime)
+        {
+            float progress = (Time.time - startTime) / reflectFlightTime;
+            projectile.transform.position = Vector3.Lerp(from, to, progress);
+            yield return null;
+        }
+
+        projectile.SetActive(false);
+        yield return FlashBoss();
+    }
+
+    private IEnumerator Knockback(Vector3 bossStartPosition, Vector3 playerPosition)
+    {
+        Vector3 away = bossStartPosition - playerPosition;
+        away.y = 0f;
+        Vector3 pushedPosition = bossStartPosition + away.normalized * knockbackDistance;
+
+        SetBossColor(hitFlashColor);
+        float startTime = Time.time;
+
+        while (Time.time < startTime + knockbackTime)
+        {
+            float t = (Time.time - startTime) / knockbackTime;
+            float push = t < 0.5f ? t * 2f : (1f - t) * 2f;
+            bossModel.position = Vector3.Lerp(bossStartPosition, pushedPosition, push);
+            yield return null;
+        }
+
+        bossModel.position = bossStartPosition;
+        ResetBossColor();
+    }
+
+    private IEnumerator FlashBoss()
+    {
+        SetBossColor(hitFlashColor);
+        yield return new WaitForSeconds(0.15f);
+        ResetBossColor();
+    }
+
+    private void SetBossColor(Color color)
+    {
+        if (bossRenderer != null)
+        {
+            bossRenderer.material.color = color;
+        }
+    }
+
+    private void ResetBossColor()
+    {
+        SetBossColor(bossOriginalColor);
+    }
+
+    // True only on the frame the button goes down
     private bool WasParryPressed()
     {
         return Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame;
+    }
+
+    // True for as long as the button is held
+    private bool IsParryHeld()
+    {
+        return Mouse.current != null && Mouse.current.rightButton.isPressed;
     }
 
     private void HideVisuals()
