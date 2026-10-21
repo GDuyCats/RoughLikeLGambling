@@ -6,7 +6,7 @@ using UnityEngine.UI;
 // Both System and UnityEngine have a "Random", so we tell C# to use Unity's one
 using Random = UnityEngine.Random;
 
-// Manages everything shared by all minigames: chips, bets, rounds, curses, health, the final boss
+// Manages everything shared by all minigames: character, chips, bets, rounds, curses, health, the final boss
 public class RunManager : MonoBehaviour
 {
     [Header("UI")]
@@ -26,6 +26,12 @@ public class RunManager : MonoBehaviour
     [SerializeField] private Button[] upgradeButtons;
     [SerializeField] private List<Upgrade> upgradePool;
 
+    [Header("Characters")]
+    [SerializeField] private List<CharacterData> characters;
+    [SerializeField] private GameObject characterPanel;
+    [SerializeField] private Button[] characterButtons;
+    [SerializeField] private Renderer playerRenderer;   // Recolored to match the chosen chibi
+
     [Header("Rarity")]
     [SerializeField] private int commonWeight = 70;
     [SerializeField] private int rareWeight = 25;
@@ -41,9 +47,10 @@ public class RunManager : MonoBehaviour
 
     [Header("Final Boss")]
     [SerializeField] private List<FinalBoss> finalBossPool;
-    [SerializeField] private int revealBossFromRound = 7;   // From this round, the player knows who the final boss is
-    [SerializeField] private int playerMaxHealth = 100;
+    [SerializeField] private int revealBossFromRound = 7;
+    [SerializeField] private int playerMaxHealth = 100;   // Base health before the character's bonus
     [SerializeField] private BossCombat bossCombat;
+
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
     [SerializeField] private int betAmount = 10;
@@ -62,6 +69,7 @@ public class RunManager : MonoBehaviour
 
     private TMP_Text restartButtonText;
 
+    private CharacterData character;   // The chibi chosen for this run
     private int chips;
     private int roundNumber;
     private int targetChips;
@@ -74,22 +82,26 @@ public class RunManager : MonoBehaviour
     private BossModifier currentCurse;
     private bool lastRoundWasCurse;
 
-    private FinalBoss finalBoss;   // Chosen at the start of each run
+    private FinalBoss finalBoss;
     private int playerHealth;
     private int bossHealth;
     private bool isBossAttacking;
-    public bool CanPlay => !isGameOver && !upgradePanel.activeSelf && !isBossAttacking;
+
+    public bool CanPlay => !isGameOver && !upgradePanel.activeSelf && !characterPanel.activeSelf && !isBossAttacking;
     public int PlaysLeft => playsLeft;
     public int RoundNumber => roundNumber;
     public int Chips => chips;
     public int BetLevel => betLevel;
     public int MaxBetLevel => startingMaxBetLevel + GetUpgradeTotal(UpgradeType.ExtraBetLevel);
+    public int MaxHealth => playerMaxHealth + (character != null ? character.MaxHealthBonus : 0);
     public bool HasPlayedThisRound => playsUsedThisRound > 0;
     public bool IsCurseRound => currentCurse != null;
     public bool IsFinalRound => roundNumber == finalRound;
     public FinalBoss FinalBoss => finalBoss;
     public bool IsBossFight => IsFinalRound && finalBoss != null;
     public bool IsBossRevealed => roundNumber >= revealBossFromRound;
+    public bool CanPerfectParry => character == null || character.CanPerfectParry;
+    public bool CanBlock => character == null || character.CanBlock;
 
     public bool IsMinigameBusy { get; private set; }
 
@@ -104,12 +116,17 @@ public class RunManager : MonoBehaviour
         StartNewRun();
     }
 
+    // Resets the run, then waits for the player to choose a chibi
     public void StartNewRun()
     {
+        character = null;
         chips = startingChips;
-        playerHealth = playerMaxHealth;
         ownedUpgrades.Clear();
         betLevel = 1;
+        roundNumber = 0;
+        targetChips = 0;
+        playsLeft = 0;
+        currentCurse = null;
         isGameOver = false;
         isVictory = false;
         IsMinigameBusy = false;
@@ -120,13 +137,58 @@ public class RunManager : MonoBehaviour
         {
             bossCombat.CancelAttack();
         }
+
         finalBoss = finalBossPool.Count > 0 ? finalBossPool[Random.Range(0, finalBossPool.Count)] : null;
 
         upgradePanel.SetActive(false);
         restartButton.gameObject.SetActive(false);
+
+        ShowCharacterChoices();
+        messageText.text = "Choose your chibi!";
+        UpdateUI();
+    }
+
+    private void ShowCharacterChoices()
+    {
+        for (int i = 0; i < characterButtons.Length; i++)
+        {
+            Button button = characterButtons[i];
+
+            if (i >= characters.Count)
+            {
+                button.gameObject.SetActive(false);
+                continue;
+            }
+
+            CharacterData choice = characters[i];
+            button.gameObject.SetActive(true);
+            button.GetComponentInChildren<TMP_Text>().text = $"<b>{choice.DisplayName}</b>\n\n{choice.Description}";
+            button.image.color = choice.Color;
+
+            button.onClick.RemoveAllListeners();
+            button.onClick.AddListener(() => ChooseCharacter(choice));
+        }
+
+        characterPanel.SetActive(true);
+    }
+
+    // The run really begins once a chibi is chosen
+    private void ChooseCharacter(CharacterData chosen)
+    {
+        character = chosen;
+        characterPanel.SetActive(false);
+
+        ownedUpgrades.AddRange(chosen.StartingUpgrades);
+        playerHealth = MaxHealth;
+
+        if (playerRenderer != null)
+        {
+            playerRenderer.material.color = chosen.Color;
+        }
+
+        // Announce the new run first (so tables reset), then start round 1
         RunStarted?.Invoke();
         StartRound(1);
-        // RunStarted?.Invoke();
         UpdateUI();
     }
 
@@ -166,18 +228,20 @@ public class RunManager : MonoBehaviour
         UpdateUI();
     }
 
-    // In the boss fight, wins damage the boss and losses damage the player instead of costing chips
-    // In the boss fight, wins damage the boss and losses make the boss attack
     private void HandleBossPlay(int chipChange, string message)
     {
         playsUsedThisRound++;
 
-        // A lost hand: the boss attacks, and the player can try to parry
+        // A lost hand: the boss attacks, and the player defends as their chibi allows
         if (chipChange < 0 && bossCombat != null)
         {
+            string defenseHint = CanPerfectParry ? "RIGHT-CLICK to parry!"
+                : CanBlock ? "Hold RIGHT-CLICK to block!"
+                : "Brace yourself!";
+
             isBossAttacking = true;
-            messageText.text = message + $"\n{finalBoss.DisplayName} attacks! RIGHT-CLICK to parry!";
-            bossCombat.StartAttack(-chipChange, FinishBossAttack);
+            messageText.text = message + $"\n{finalBoss.DisplayName} attacks! {defenseHint}";
+            bossCombat.StartAttack(-chipChange, CanPerfectParry, CanBlock, FinishBossAttack);
             UpdateUI();
             return;
         }
@@ -189,7 +253,6 @@ public class RunManager : MonoBehaviour
         }
         else if (chipChange < 0)
         {
-            // Only used if no BossCombat is assigned
             int damage = -chipChange;
             playerHealth = Mathf.Max(0, playerHealth - damage);
             message += $"\n{finalBoss.DisplayName} hits you for {damage} damage!";
@@ -204,13 +267,11 @@ public class RunManager : MonoBehaviour
         UpdateUI();
     }
 
-    // Called by BossCombat when the boss's attack is over
     private void FinishBossAttack(AttackOutcome outcome)
     {
         isBossAttacking = false;
 
-        // Healing can never go above max health
-        playerHealth = Mathf.Clamp(playerHealth - outcome.DamageTaken + outcome.HealAmount, 0, playerMaxHealth);
+        playerHealth = Mathf.Clamp(playerHealth - outcome.DamageTaken + outcome.HealAmount, 0, MaxHealth);
         bossHealth = Mathf.Max(0, bossHealth - outcome.BossDamage);
         messageText.text = outcome.Message;
 
@@ -229,6 +290,7 @@ public class RunManager : MonoBehaviour
             GameOver();
         }
     }
+
     public void ShowMessage(string message)
     {
         messageText.text = message;
@@ -396,7 +458,7 @@ public class RunManager : MonoBehaviour
     {
         isGameOver = true;
 
-        messageText.text += playerHealth <= 0
+        messageText.text += playerHealth <= 0 && finalBoss != null
             ? $"\nYou were knocked out by {finalBoss.DisplayName}!"
             : $"\nGame over! You reached round {roundNumber} of {finalRound}.";
 
@@ -601,6 +663,13 @@ public class RunManager : MonoBehaviour
     private string BuildStatsText()
     {
         string text = "Stats:";
+
+        if (character != null)
+        {
+            string parryType = CanPerfectParry ? "perfect + block" : CanBlock ? "block only" : "none";
+            text += $"\nChibi: {character.DisplayName} (parry: {parryType})";
+        }
+
         text += $"\nBet: {GetCurrentBet()} (x{betLevel} of x{MaxBetLevel})";
         text += $"\nPlays per round: {playsPerRound + GetUpgradeTotal(UpgradeType.ExtraGuesses)}";
 
@@ -642,7 +711,7 @@ public class RunManager : MonoBehaviour
         {
             text += "\n<color=#FF6B6B>Curse round now!</color>";
         }
-        else
+        else if (roundNumber > 0)
         {
             int nextCurse = GetNextCurseRound();
 
@@ -651,7 +720,6 @@ public class RunManager : MonoBehaviour
                 text += $"\nNext curse: round {nextCurse}";
             }
 
-            // Reveal the final boss and its favorite game a few rounds early
             if (finalBoss != null && IsBossRevealed)
             {
                 text += $"\nFinal boss: {finalBoss.DisplayName} ({FinalBoss.GetGameName(finalBoss.FavoriteGame)}) at round {finalRound}";
@@ -673,16 +741,20 @@ public class RunManager : MonoBehaviour
         }
 
         chipsText.text = $"Chips: {chips}   Bet: {GetCurrentBet()} (x{betLevel})";
-        healthText.text = $"HP: {playerHealth}/{playerMaxHealth}";
+        healthText.text = $"HP: {playerHealth}/{MaxHealth}";
 
         if (IsBossFight)
         {
             roundText.text = $"Round {roundNumber}/{finalRound}  (FINAL BOSS)  |  Boss HP: {bossHealth}/{finalBoss.MaxHealth}";
         }
-        else
+        else if (roundNumber > 0)
         {
             string roundTag = IsCurseRound ? "  (CURSE)" : "";
             roundText.text = $"Round {roundNumber}/{finalRound}{roundTag}  |  Goal: {targetChips}  |  Plays: {playsLeft}";
+        }
+        else
+        {
+            roundText.text = "Choosing a chibi...";
         }
 
         ownedUpgradesText.text = BuildOwnedUpgradesText();

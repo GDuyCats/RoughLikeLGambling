@@ -66,10 +66,11 @@ public class BossCombat : MonoBehaviour
         HideVisuals();
     }
 
-    public void StartAttack(int damage, Action<AttackOutcome> onFinished)
+    // What the player can do depends on the chosen chibi
+    public void StartAttack(int damage, bool canPerfectParry, bool canBlock, Action<AttackOutcome> onFinished)
     {
         CancelAttack();
-        attackRoutine = StartCoroutine(AttackRoutine(damage, onFinished));
+        attackRoutine = StartCoroutine(AttackRoutine(damage, canPerfectParry, canBlock, onFinished));
     }
 
     public void CancelAttack()
@@ -81,7 +82,7 @@ public class BossCombat : MonoBehaviour
         HideVisuals();
     }
 
-    private IEnumerator AttackRoutine(int damage, Action<AttackOutcome> onFinished)
+    private IEnumerator AttackRoutine(int damage, bool canPerfectParry, bool canBlock, Action<AttackOutcome> onFinished)
     {
         IsAttacking = true;
 
@@ -139,7 +140,7 @@ public class BossCombat : MonoBehaviour
         ResetBossColor();
         parryCue.SetActive(false);
 
-        bool isPerfect = firstPressTime.HasValue && Mathf.Abs(firstPressTime.Value - impactTime) <= perfectWindow;
+        bool isPerfect = canPerfectParry && firstPressTime.HasValue && Mathf.Abs(firstPressTime.Value - impactTime) <= perfectWindow;
         string attackName = isProjectile ? "projectile" : "strike";
         AttackOutcome outcome = new AttackOutcome();
 
@@ -158,7 +159,7 @@ public class BossCombat : MonoBehaviour
             outcome.BossDamage = Mathf.Max(1, Mathf.RoundToInt(damage * counterDamageMultiplier));
             outcome.Message = $"PERFECT PARRY! Your counterattack deals {outcome.BossDamage} damage!";
         }
-        else if (heldAtImpact)
+        else if (canBlock && heldAtImpact)
         {
             outcome.DamageTaken = Mathf.CeilToInt(damage / 2f);
             outcome.Message = $"Blocked! The {attackName} deals {outcome.DamageTaken} damage.";
