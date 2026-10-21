@@ -12,10 +12,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f1d8932fba5a67d4f9686eb850eac4ff, type: 3}
   m_Name: Tycoon
   m_EditorClassIdentifier: Assembly-CSharp::CharacterData
-  displayName: Duelist
-  description: "\tA master of the perfect parry. Reflect, heal and counter in the boss fight."
-  color: {r: 1, g: 0.8352941, b: 0.30980393, a: 1}
+  displayName: Tycoon
+  description: Money makes money. Starts with Piggy Bank and Big Spender, but can only block in the boss fight.
+  color: {r: 0.4, g: 0.73333335, b: 0.41568628, a: 1}
   maxHealthBonus: 0
-  canPerfectParry: 1
-  canBlock: 1
-  startingUpgrades: []
+  canPerfectParry: 0
+  canBlock: 0
+  startingUpgrades:
+  - {fileID: 11400000, guid: 52b6915ca324d8b4681d4262a8d4caaf, type: 2}
+  - {fileID: 11400000, guid: dd39a17412fbe294c93c9bbc8508b3d4, type: 2}
