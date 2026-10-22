@@ -52,7 +52,7 @@ public class RunManager : MonoBehaviour
     [SerializeField] private BossCombat bossCombat;
     [SerializeField] private int overtimeStartPlay = 10;          // Overtime begins on this play of the boss fight
     [SerializeField] private float overtimeRampPerPlay = 0.1f;
-    
+
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
     [SerializeField] private int betAmount = 10;
@@ -267,7 +267,7 @@ public class RunManager : MonoBehaviour
 
                 isBossAttacking = true;
                 messageText.text = message + $"\n{finalBoss.DisplayName} attacks! {defenseHint}";
-                bossCombat.StartAttack(-chipChange, CanPerfectParry, CanBlock, windowBonus, rewardBonus, FinishBossAttack);
+                bossCombat.StartAttack(-chipChange, finalBoss, CanPerfectParry, CanBlock, windowBonus, rewardBonus, FinishBossAttack);
                 UpdateUI();
                 return;
             }

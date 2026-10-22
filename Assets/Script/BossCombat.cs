@@ -15,10 +15,35 @@ public struct AttackOutcome
     public string Message;
 }
 
-// Plays the final boss's attacks: a volley of bullets or one melee strike.
-// Like Street Fighter 6: press right click as a hit lands for a perfect parry, hold it to block.
+// Plays the final boss's attacks. The player parries with right click (press = perfect, hold = block),
+// and the boss can parry the player's reflected bullets and counters back, like a tennis rally.
 public class BossCombat : MonoBehaviour
 {
+    // One hit coming at the player: a bullet (first shot or sent back by the boss) or a melee strike
+    private class IncomingHit
+    {
+        public GameObject Bullet;   // null for a melee strike
+        public float LaunchTime;
+        public float ImpactTime;
+        public int Damage;
+        public int Rally;           // How many times this hit has already gone back and forth
+        public bool Perfected;
+        public bool Landed;
+        public bool Held;
+
+        public bool IsProjectile => Bullet != null;
+    }
+
+    // One parried bullet flying back to the boss
+    private class OutgoingShot
+    {
+        public GameObject Bullet;
+        public float StartTime;
+        public float ArriveTime;
+        public int Damage;
+        public int Rally;
+    }
+
     [Header("Scene")]
     [SerializeField] private Transform bossModel;
     [SerializeField] private Renderer bossRenderer;
@@ -27,35 +52,25 @@ public class BossCombat : MonoBehaviour
     [SerializeField] private GameObject parryCue;
     [SerializeField] private RectTransform shrinkingRing;
 
-    [Header("Attacks")]
-    [SerializeField, Range(0f, 1f)] private float projectileChance = 0.5f;   // The rest are melee strikes
-
-    [Header("Projectile Volley")]
-    [SerializeField] private int minBullets = 2;
-    [SerializeField] private int maxBullets = 4;
-    [SerializeField] private float bulletFlightTime = 0.6f;     // How long each bullet takes to reach the player
-    [SerializeField] private float firstBulletMinTime = 0.7f;   // When the first bullet lands, after the attack starts
+    [Header("Timing (the boss's own style is in its FinalBoss file)")]
+    [SerializeField] private float bulletFlightTime = 0.6f;
+    [SerializeField] private float firstBulletMinTime = 0.7f;
     [SerializeField] private float firstBulletMaxTime = 1.0f;
-    [SerializeField] private float bulletMinGap = 0.2f;         // Shortest time between two bullets landing
-    [SerializeField] private float bulletMaxGap = 0.6f;         // Longest time between two bullets landing        // Time between two bullets landing
-
-    [Header("Melee Strike")]
-    [SerializeField] private float meleeMinWindup = 0.5f;
-    [SerializeField] private float meleeMaxWindup = 1.2f;
     [SerializeField] private float meleeLungeTime = 0.2f;
     [SerializeField, Range(0f, 1f)] private float meleeLungeDistance = 0.6f;
     [SerializeField, Range(0f, 0.5f)] private float meleeShakeAmount = 0.15f;
+    [SerializeField] private float followUpWindup = 0.25f;   // Wind-up of the quick strike after the boss parries a counter
     [SerializeField] private Color windupColor = Color.white;
 
     [Header("Parry")]
-    [SerializeField] private float perfectWindow = 0.08f;   // A press within this time of a hit landing: perfect parry
-    [SerializeField] private float whiffLockout = 0.25f;    // A press with no hit nearby blocks perfect parries for this long
+    [SerializeField] private float perfectWindow = 0.08f;
+    [SerializeField] private float whiffLockout = 0.25f;
     [SerializeField] private float ringStartScale = 3f;
     [SerializeField] private bool showTimingCue = true;
 
     [Header("Block")]
-    [SerializeField, Range(0f, 1f)] private float projectileBlockReduction = 0.75f;   // Blocking a bullet stops this share of its damage
-    [SerializeField, Range(0f, 1f)] private float meleeBlockReduction = 0.4f;         // Blocking a strike stops this share of its damage
+    [SerializeField, Range(0f, 1f)] private float projectileBlockReduction = 0.75f;
+    [SerializeField, Range(0f, 1f)] private float meleeBlockReduction = 0.4f;
 
     [Header("Perfect Parry Rewards")]
     [SerializeField, Range(0f, 3f)] private float reflectDamageMultiplier = 1f;
@@ -66,8 +81,33 @@ public class BossCombat : MonoBehaviour
     [SerializeField] private float knockbackTime = 0.25f;
     [SerializeField] private Color hitFlashColor = Color.yellow;
 
+    [Header("Boss Parry (Rally)")]
+    [SerializeField, Range(0f, 1f)] private float rallyChanceDecay = 0.1f;   // The boss's parry chance drops by this on each return
+    [SerializeField, Range(0.3f, 1f)] private float rallySpeedUp = 0.8f;     // Each return takes this times as long, so it gets faster
+    [SerializeField] private float rallyDamageGrowth = 0.15f;                    // Each return adds this share of extra damage, for both sides
+    [SerializeField] private int maxRallies = 5;
+    [SerializeField] private Color bossParryColor = Color.cyan;
+
     private readonly List<GameObject> activeBullets = new List<GameObject>();
+    private readonly List<IncomingHit> incoming = new List<IncomingHit>();
+    private readonly List<OutgoingShot> outgoing = new List<OutgoingShot>();
+
     private Color bossOriginalColor;
+    private Vector3 bossHome;
+    private Vector3 bossHomeScale;
+    private Vector3 target;
+    private float visualsBusyUntil;
+    private float flashUntil;
+    private Color flashColor;
+    private float knockbackStart;
+    private float knockbackEnd;
+
+    // Running totals for the current attack
+    private AttackOutcome outcome;
+    private int perfects;
+    private int blocks;
+    private int hits;
+    private int bossParries;
 
     public bool IsAttacking { get; private set; }
 
@@ -81,80 +121,76 @@ public class BossCombat : MonoBehaviour
         HideVisuals();
     }
 
-    public void StartAttack(int damage, bool canPerfectParry, bool canBlock, float perfectWindowBonus, int rewardBonusPercent, Action<AttackOutcome> onFinished)
+    public void StartAttack(int damage, FinalBoss boss, bool canPerfectParry, bool canBlock, float perfectWindowBonus, int rewardBonusPercent, Action<AttackOutcome> onFinished)
     {
         CancelAttack();
-        StartCoroutine(AttackRoutine(damage, canPerfectParry, canBlock, perfectWindowBonus, rewardBonusPercent, onFinished));
+        StartCoroutine(AttackRoutine(damage, boss, canPerfectParry, canBlock, perfectWindowBonus, rewardBonusPercent, onFinished));
     }
 
     public void CancelAttack()
     {
         StopAllCoroutines();
         ClearBullets();
+        incoming.Clear();
+        outgoing.Clear();
+
+        if (IsAttacking)
+        {
+            bossModel.position = bossHome;
+            bossModel.localScale = bossHomeScale;
+        }
+
         IsAttacking = false;
         ResetBossColor();
         HideVisuals();
     }
 
-    private IEnumerator AttackRoutine(int damage, bool canPerfectParry, bool canBlock, float perfectWindowBonus, int rewardBonusPercent, Action<AttackOutcome> onFinished)
+    private IEnumerator AttackRoutine(int damage, FinalBoss boss, bool canPerfectParry, bool canBlock, float perfectWindowBonus, int rewardBonusPercent, Action<AttackOutcome> onFinished)
     {
         IsAttacking = true;
+        incoming.Clear();
+        outgoing.Clear();
+        outcome = new AttackOutcome();
+        perfects = 0;
+        blocks = 0;
+        hits = 0;
+        bossParries = 0;
 
-        bool isProjectile = Random.value < projectileChance;
+        bossHome = bossModel.position;
+        bossHomeScale = bossModel.localScale;
+        target = player.position;
+        visualsBusyUntil = 0f;
+        flashUntil = 0f;
+        knockbackEnd = 0f;
+
         float window = perfectWindow + perfectWindowBonus;
-        float startTime = Time.time;
-
-        // When each hit lands: a volley has several bullets, a strike has one hit
-        int hitCount = isProjectile ? Random.Range(minBullets, maxBullets + 1) : 1;
-        float[] impactTimes = new float[hitCount];
+        float rewardScale = 1f + rewardBonusPercent / 100f;
+        float lockoutUntil = 0f;
+        bool isProjectile = Random.value < boss.ProjectileChance;
 
         if (isProjectile)
         {
-            float firstImpact = startTime + Random.Range(firstBulletMinTime, firstBulletMaxTime);
-
-            float nextImpact = firstImpact;
-
-            for (int i = 0; i < hitCount; i++)
-            {
-                impactTimes[i] = nextImpact;
-
-                // A random gap before the next bullet, so the rhythm can't be memorized
-                nextImpact += Random.Range(bulletMinGap, bulletMaxGap);
-            }
+            QueueVolley(damage, boss);
         }
         else
         {
-            impactTimes[0] = startTime + Random.Range(meleeMinWindup, meleeMaxWindup) + meleeLungeTime;
+            QueueStrike(damage, Random.Range(boss.MeleeMinWindup, boss.MeleeMaxWindup), 0);
         }
 
-        float lastImpact = impactTimes[hitCount - 1];
-
-        bool[] perfected = new bool[hitCount];
-        bool[] heldAtImpact = new bool[hitCount];
-        bool[] landed = new bool[hitCount];
-        bool[] reflecting = new bool[hitCount];   // Bullets already flying back to the boss
-        float lockoutUntil = 0f;
-
-        Vector3 bossStartPosition = bossModel.position;
-        Vector3 bossStartScale = bossModel.localScale;
-        Vector3 target = player.position;
-
-        GameObject[] bullets = isProjectile ? SpawnBullets(hitCount) : new GameObject[0];
-        parryCue.SetActive(isProjectile && showTimingCue);
-
-        while (Time.time <= lastImpact + window)
+        // Keep going until nothing is flying and every animation has finished
+        while (incoming.Count > 0 || outgoing.Count > 0 || Time.time < visualsBusyUntil)
         {
             float now = Time.time;
 
-            // A press counts as a perfect parry for a hit landing within the window.
+            // A press counts as a perfect parry for a hit inside the window.
             // A press with no hit nearby is a whiff and locks parrying for a moment, so mashing doesn't work.
             if (canPerfectParry && WasParryPressed() && now >= lockoutUntil)
             {
-                int hit = FindHitInWindow(impactTimes, perfected, now, window);
+                IncomingHit hit = FindHitInWindow(now, window);
 
-                if (hit >= 0)
+                if (hit != null)
                 {
-                    perfected[hit] = true;
+                    hit.Perfected = true;
                 }
                 else
                 {
@@ -162,104 +198,195 @@ public class BossCombat : MonoBehaviour
                 }
             }
 
-            // When a hit lands, remember whether parry was being held (a block)
-            for (int i = 0; i < hitCount; i++)
+            // ToArray() makes a copy to loop over, because resolving a hit can change the list
+            foreach (IncomingHit hit in incoming.ToArray())
             {
-                if (!landed[i] && now >= impactTimes[i])
+                if (!hit.Landed && now >= hit.ImpactTime)
                 {
-                    landed[i] = true;
-                    heldAtImpact[i] = IsParryHeld();
-                }
-            }
+                    hit.Landed = true;
+                    hit.Held = IsParryHeld();
 
-            if (isProjectile)
-            {
-                // A parried bullet flies back right away, so each one is seen on its own
-                for (int i = 0; i < hitCount; i++)
-                {
-                    if (perfected[i] && landed[i] && !reflecting[i])
+                    if (hit.IsProjectile)
                     {
-                        reflecting[i] = true;
-                        StartCoroutine(FlyBack(bullets[i], target, bossStartPosition));
+                        hit.Bullet.SetActive(false);
                     }
                 }
 
-                UpdateBullets(bullets, impactTimes, landed, reflecting, bossStartPosition, target);
-                UpdateRing(impactTimes, landed);
-            }
-            else
-            {
-                AnimateMelee(bossStartPosition, bossStartScale, target, impactTimes[0]);
+                // Wait a moment after impact, so a slightly late press can still be perfect
+                if (now >= hit.ImpactTime + window)
+                {
+                    incoming.Remove(hit);
+                    ResolveIncoming(hit, boss, canBlock, rewardScale);
+                }
             }
 
+            foreach (OutgoingShot shot in outgoing.ToArray())
+            {
+                if (now >= shot.ArriveTime)
+                {
+                    outgoing.Remove(shot);
+                    ResolveOutgoing(shot, boss, rewardScale);
+                }
+            }
+
+            UpdateVisuals(now);
             yield return null;
         }
 
-        bossModel.position = bossStartPosition;
-        bossModel.localScale = bossStartScale;
+        bossModel.position = bossHome;
+        bossModel.localScale = bossHomeScale;
         ResetBossColor();
-        parryCue.SetActive(false);
-
-        // Add up what happened to every hit
-        AttackOutcome outcome = new AttackOutcome();
-        float rewardScale = 1f + rewardBonusPercent / 100f;
-        float blockReduction = isProjectile ? projectileBlockReduction : meleeBlockReduction;
-        int perfects = 0;
-        int blocks = 0;
-        int hits = 0;
-
-        for (int i = 0; i < hitCount; i++)
-        {
-            int share = GetDamageShare(damage, hitCount, i);
-
-            if (perfected[i])
-            {
-                perfects++;
-
-                if (isProjectile)
-                {
-                    outcome.BossDamage += Mathf.Max(1, Mathf.RoundToInt(share * reflectDamageMultiplier * rewardScale));
-                    outcome.HealAmount += Mathf.RoundToInt(share * reflectHealPercent * rewardScale);
-                }
-                else
-                {
-                    outcome.BossDamage += Mathf.Max(1, Mathf.RoundToInt(share * counterDamageMultiplier * rewardScale));
-                }
-            }
-            else if (canBlock && heldAtImpact[i])
-            {
-                blocks++;
-                outcome.DamageTaken += Mathf.CeilToInt(share * (1f - blockReduction));
-            }
-            else
-            {
-                hits++;
-                outcome.DamageTaken += share;
-            }
-        }
-
-        if (perfects > 0)
-        {
-            if (isProjectile)
-            {
-                // Let the last reflected bullets finish flying back
-                yield return new WaitForSeconds(reflectFlightTime);
-            }
-            else
-            {
-                yield return Knockback(bossStartPosition, target);
-            }
-        }
-
         ClearBullets();
         HideVisuals();
 
-        outcome.Message = BuildResultMessage(isProjectile, hitCount, perfects, blocks, hits, outcome);
+        outcome.Message = BuildResultMessage(isProjectile);
         IsAttacking = false;
         onFinished?.Invoke(outcome);
     }
 
-    // Splits the damage as evenly as possible, e.g. 10 over 3 bullets = 4, 3, 3
+    private void QueueVolley(int damage, FinalBoss boss)
+    {
+        int count = Random.Range(boss.MinBullets, boss.MaxBullets + 1);
+        float nextImpact = Time.time + Random.Range(firstBulletMinTime, firstBulletMaxTime);
+
+        for (int i = 0; i < count; i++)
+        {
+            incoming.Add(new IncomingHit
+            {
+                Bullet = SpawnBullet(),
+                LaunchTime = nextImpact - bulletFlightTime,
+                ImpactTime = nextImpact,
+                Damage = GetDamageShare(damage, count, i)
+            });
+
+            // A random gap before the next bullet, so the rhythm can't be memorized
+            nextImpact += Random.Range(boss.BulletMinGap, boss.BulletMaxGap);
+        }
+    }
+
+    private void QueueStrike(int damage, float windup, int rally)
+    {
+        incoming.Add(new IncomingHit
+        {
+            Bullet = null,
+            LaunchTime = Time.time,
+            ImpactTime = Time.time + windup + meleeLungeTime,
+            Damage = damage,
+            Rally = rally
+        });
+    }
+
+    // A hit reached the player: perfect parry sends it back, otherwise block or take the damage
+    private void ResolveIncoming(IncomingHit hit, FinalBoss boss, bool canBlock, float rewardScale)
+    {
+        int damage = GetRallyDamage(hit.Damage, hit.Rally);
+
+        if (hit.Perfected)
+        {
+            perfects++;
+
+            if (hit.IsProjectile)
+            {
+                float flight = reflectFlightTime * Mathf.Pow(rallySpeedUp, hit.Rally);
+                hit.Bullet.SetActive(true);
+
+                outgoing.Add(new OutgoingShot
+                {
+                    Bullet = hit.Bullet,
+                    StartTime = Time.time,
+                    ArriveTime = Time.time + flight,
+                    Damage = hit.Damage,
+                    Rally = hit.Rally
+                });
+            }
+            else
+            {
+                ResolveCounter(hit, boss, rewardScale);
+            }
+
+            return;
+        }
+
+        float reduction = hit.IsProjectile ? projectileBlockReduction : meleeBlockReduction;
+
+        if (canBlock && hit.Held)
+        {
+            blocks++;
+            outcome.DamageTaken += Mathf.CeilToInt(damage * (1f - reduction));
+        }
+        else
+        {
+            hits++;
+            outcome.DamageTaken += damage;
+        }
+
+        if (hit.IsProjectile)
+        {
+            DestroyBullet(hit.Bullet);
+        }
+    }
+
+    // A reflected bullet reached the boss: the boss may parry it back, faster
+    private void ResolveOutgoing(OutgoingShot shot, FinalBoss boss, float rewardScale)
+    {
+        if (shot.Rally < maxRallies && Random.value < GetBossParryChance(boss, shot.Rally))
+        {
+            bossParries++;
+            Flash(bossParryColor);
+
+            float flight = bulletFlightTime * Mathf.Pow(rallySpeedUp, shot.Rally + 1);
+
+            incoming.Add(new IncomingHit
+            {
+                Bullet = shot.Bullet,
+                LaunchTime = Time.time,
+                ImpactTime = Time.time + flight,
+                Damage = shot.Damage,
+                Rally = shot.Rally + 1
+            });
+
+            return;
+        }
+
+        int damage = GetRallyDamage(shot.Damage, shot.Rally);
+        outcome.BossDamage += Mathf.Max(1, Mathf.RoundToInt(damage * reflectDamageMultiplier * rewardScale));
+        outcome.HealAmount += Mathf.RoundToInt(damage * reflectHealPercent * rewardScale);
+
+        Flash(hitFlashColor);
+        DestroyBullet(shot.Bullet);
+    }
+
+    // The player perfect parried a strike and counters: the boss may parry and strike again quickly
+    private void ResolveCounter(IncomingHit hit, FinalBoss boss, float rewardScale)
+    {
+        if (hit.Rally < maxRallies && Random.value < GetBossParryChance(boss, hit.Rally))
+        {
+            bossParries++;
+            Flash(bossParryColor);
+            QueueStrike(hit.Damage, followUpWindup, hit.Rally + 1);
+            return;
+        }
+
+        int damage = GetRallyDamage(hit.Damage, hit.Rally);
+        outcome.BossDamage += Mathf.Max(1, Mathf.RoundToInt(damage * counterDamageMultiplier * rewardScale));
+
+        knockbackStart = Time.time;
+        knockbackEnd = Time.time + knockbackTime;
+        visualsBusyUntil = Mathf.Max(visualsBusyUntil, knockbackEnd);
+        Flash(hitFlashColor);
+    }
+
+    private float GetBossParryChance(FinalBoss boss, int rally)
+    {
+        return Mathf.Max(0f, boss.ParryChance - rallyChanceDecay * rally);
+    }
+
+    // Every return makes the hit hurt more, for whoever ends up taking it
+    private int GetRallyDamage(int damage, int rally)
+    {
+        return Mathf.RoundToInt(damage * (1f + rallyDamageGrowth * rally));
+    }
+
     private int GetDamageShare(int totalDamage, int hitCount, int index)
     {
         int baseShare = totalDamage / hitCount;
@@ -267,19 +394,18 @@ public class BossCombat : MonoBehaviour
         return baseShare + (index < remainder ? 1 : 0);
     }
 
-    // The closest hit to "now" that is inside the window and not parried yet (-1 if none)
-    private int FindHitInWindow(float[] impactTimes, bool[] perfected, float now, float window)
+    private IncomingHit FindHitInWindow(float now, float window)
     {
-        int best = -1;
+        IncomingHit best = null;
         float bestGap = window;
 
-        for (int i = 0; i < impactTimes.Length; i++)
+        foreach (IncomingHit hit in incoming)
         {
-            float gap = Mathf.Abs(now - impactTimes[i]);
+            float gap = Mathf.Abs(now - hit.ImpactTime);
 
-            if (!perfected[i] && gap <= bestGap)
+            if (!hit.Perfected && gap <= bestGap)
             {
-                best = i;
+                best = hit;
                 bestGap = gap;
             }
         }
@@ -287,70 +413,141 @@ public class BossCombat : MonoBehaviour
         return best;
     }
 
-    // Instantiate makes a copy of the template bullet for each shot
-    private GameObject[] SpawnBullets(int count)
+    private void UpdateVisuals(float now)
     {
-        GameObject[] bullets = new GameObject[count];
+        // The boss's body: a melee wind-up, a knockback, or standing still
+        IncomingHit strike = null;
 
-        for (int i = 0; i < count; i++)
+        foreach (IncomingHit hit in incoming)
         {
-            GameObject bullet = Instantiate(projectile);
-            bullet.SetActive(false);
-            activeBullets.Add(bullet);
-            bullets[i] = bullet;
+            if (!hit.IsProjectile && !hit.Landed)
+            {
+                strike = hit;
+                break;
+            }
         }
 
-        return bullets;
-    }
-
-    // Each bullet leaves the boss at its own time and disappears when it lands
-    private void UpdateBullets(GameObject[] bullets, float[] impactTimes, bool[] landed, bool[] reflecting, Vector3 from, Vector3 to)
-    {
-        for (int i = 0; i < bullets.Length; i++)
+        if (strike != null)
         {
-            // Reflected bullets are moved by FlyBack instead
-            if (reflecting[i])
+            AnimateMelee(strike.ImpactTime, now);
+        }
+        else if (now < knockbackEnd)
+        {
+            Vector3 away = bossHome - target;
+            away.y = 0f;
+            float t = (now - knockbackStart) / knockbackTime;
+            float push = t < 0.5f ? t * 2f : (1f - t) * 2f;
+            bossModel.position = Vector3.Lerp(bossHome, bossHome + away.normalized * knockbackDistance, push);
+            bossModel.localScale = bossHomeScale;
+        }
+        else
+        {
+            bossModel.position = bossHome;
+            bossModel.localScale = bossHomeScale;
+        }
+
+        if (now < flashUntil)
+        {
+            SetBossColor(flashColor);
+        }
+        else if (strike == null)
+        {
+            ResetBossColor();
+        }
+
+        // Bullets flying toward the player
+        foreach (IncomingHit hit in incoming)
+        {
+            if (!hit.IsProjectile || hit.Landed)
             {
                 continue;
             }
 
-            float launchTime = impactTimes[i] - bulletFlightTime;
-            bool inFlight = !landed[i] && Time.time >= launchTime;
-
-            bullets[i].SetActive(inFlight);
+            bool inFlight = now >= hit.LaunchTime;
+            hit.Bullet.SetActive(inFlight);
 
             if (inFlight)
             {
-                float progress = Mathf.Clamp01((Time.time - launchTime) / bulletFlightTime);
-                bullets[i].transform.position = Vector3.Lerp(from, to, progress);
+                float progress = Mathf.Clamp01((now - hit.LaunchTime) / (hit.ImpactTime - hit.LaunchTime));
+                hit.Bullet.transform.position = Vector3.Lerp(bossHome, target, progress);
             }
         }
-    }
 
-    // The ring always shows the timing of the next bullet that hasn't landed
-    private void UpdateRing(float[] impactTimes, bool[] landed)
-    {
-        for (int i = 0; i < impactTimes.Length; i++)
+        // Reflected bullets flying back to the boss
+        foreach (OutgoingShot shot in outgoing)
         {
-            if (!landed[i])
+            float progress = Mathf.Clamp01((now - shot.StartTime) / (shot.ArriveTime - shot.StartTime));
+            shot.Bullet.transform.position = Vector3.Lerp(target, bossHome, progress);
+        }
+
+        UpdateRing(now);
+    }
+
+    // The ring shows the timing of the next bullet that hasn't landed
+    private void UpdateRing(float now)
+    {
+        IncomingHit next = null;
+
+        foreach (IncomingHit hit in incoming)
+        {
+            if (hit.IsProjectile && !hit.Landed && (next == null || hit.ImpactTime < next.ImpactTime))
             {
-                float launchTime = impactTimes[i] - bulletFlightTime;
-                float progress = Mathf.Clamp01((Time.time - launchTime) / bulletFlightTime);
-                shrinkingRing.localScale = Vector3.one * Mathf.Lerp(ringStartScale, 1f, progress);
-                return;
+                next = hit;
             }
         }
 
-        shrinkingRing.localScale = Vector3.one;
+        parryCue.SetActive(showTimingCue && next != null);
+
+        if (next != null)
+        {
+            float progress = Mathf.Clamp01((now - next.LaunchTime) / (next.ImpactTime - next.LaunchTime));
+            shrinkingRing.localScale = Vector3.one * Mathf.Lerp(ringStartScale, 1f, progress);
+        }
     }
 
-    private string BuildResultMessage(bool isProjectile, int hitCount, int perfects, int blocks, int hits, AttackOutcome outcome)
+    private void AnimateMelee(float impactTime, float now)
+    {
+        float lungeStartTime = impactTime - meleeLungeTime;
+
+        if (now < lungeStartTime)
+        {
+            float shake = 1f + meleeShakeAmount * Mathf.Sin(now * 30f);
+            bossModel.localScale = bossHomeScale * shake;
+            bossModel.position = bossHome;
+
+            bool flashOn = Mathf.Sin(now * 20f) > 0f;
+            SetBossColor(flashOn ? windupColor : bossOriginalColor);
+        }
+        else
+        {
+            bossModel.localScale = bossHomeScale;
+            SetBossColor(windupColor);
+
+            float lungeProgress = Mathf.Clamp01((now - lungeStartTime) / meleeLungeTime);
+            Vector3 lungeEnd = Vector3.Lerp(bossHome, target, meleeLungeDistance);
+            bossModel.position = Vector3.Lerp(bossHome, lungeEnd, lungeProgress);
+        }
+    }
+
+    private void Flash(Color color)
+    {
+        flashColor = color;
+        flashUntil = Time.time + 0.15f;
+        visualsBusyUntil = Mathf.Max(visualsBusyUntil, flashUntil);
+    }
+
+    private string BuildResultMessage(bool startedAsProjectile)
     {
         List<string> parts = new List<string>();
 
         if (perfects > 0)
         {
-            parts.Add(isProjectile ? $"{perfects} reflected" : "PERFECT PARRY");
+            parts.Add($"{perfects} perfect");
+        }
+
+        if (bossParries > 0)
+        {
+            parts.Add($"the boss parried back {bossParries}x");
         }
 
         if (blocks > 0)
@@ -363,7 +560,7 @@ public class BossCombat : MonoBehaviour
             parts.Add($"{hits} hit");
         }
 
-        string attackName = isProjectile ? $"Volley of {hitCount}" : "Strike";
+        string attackName = startedAsProjectile ? "Volley" : "Strike";
         string message = $"{attackName}: {string.Join(", ", parts)}. You take {outcome.DamageTaken} damage";
 
         if (outcome.BossDamage > 0)
@@ -379,76 +576,20 @@ public class BossCombat : MonoBehaviour
         return message + ".";
     }
 
-    private void AnimateMelee(Vector3 startPosition, Vector3 startScale, Vector3 target, float impactTime)
+    private GameObject SpawnBullet()
     {
-        float lungeStartTime = impactTime - meleeLungeTime;
-
-        if (Time.time < lungeStartTime)
-        {
-            float shake = 1f + meleeShakeAmount * Mathf.Sin(Time.time * 30f);
-            bossModel.localScale = startScale * shake;
-            bossModel.position = startPosition;
-
-            bool flashOn = Mathf.Sin(Time.time * 20f) > 0f;
-            SetBossColor(flashOn ? windupColor : bossOriginalColor);
-        }
-        else
-        {
-            bossModel.localScale = startScale;
-            SetBossColor(windupColor);
-
-            float lungeProgress = Mathf.Clamp01((Time.time - lungeStartTime) / meleeLungeTime);
-            Vector3 lungeEnd = Vector3.Lerp(startPosition, target, meleeLungeDistance);
-            bossModel.position = Vector3.Lerp(startPosition, lungeEnd, lungeProgress);
-        }
-    }
-
-    // One parried bullet flies from the player back into the boss
-    private IEnumerator FlyBack(GameObject bullet, Vector3 from, Vector3 to)
-    {
-        bullet.SetActive(true);
-        float startTime = Time.time;
-
-        while (Time.time < startTime + reflectFlightTime)
-        {
-            float progress = (Time.time - startTime) / reflectFlightTime;
-            bullet.transform.position = Vector3.Lerp(from, to, progress);
-            yield return null;
-        }
-
+        GameObject bullet = Instantiate(projectile);
         bullet.SetActive(false);
-        yield return FlashBoss();
+        activeBullets.Add(bullet);
+        return bullet;
     }
 
-    private IEnumerator Knockback(Vector3 bossStartPosition, Vector3 playerPosition)
+    private void DestroyBullet(GameObject bullet)
     {
-        Vector3 away = bossStartPosition - playerPosition;
-        away.y = 0f;
-        Vector3 pushedPosition = bossStartPosition + away.normalized * knockbackDistance;
-
-        SetBossColor(hitFlashColor);
-        float startTime = Time.time;
-
-        while (Time.time < startTime + knockbackTime)
-        {
-            float t = (Time.time - startTime) / knockbackTime;
-            float push = t < 0.5f ? t * 2f : (1f - t) * 2f;
-            bossModel.position = Vector3.Lerp(bossStartPosition, pushedPosition, push);
-            yield return null;
-        }
-
-        bossModel.position = bossStartPosition;
-        ResetBossColor();
+        activeBullets.Remove(bullet);
+        Destroy(bullet);
     }
 
-    private IEnumerator FlashBoss()
-    {
-        SetBossColor(hitFlashColor);
-        yield return new WaitForSeconds(0.15f);
-        ResetBossColor();
-    }
-
-    // Destroy removes the bullet copies once they are no longer needed
     private void ClearBullets()
     {
         foreach (GameObject bullet in activeBullets)
