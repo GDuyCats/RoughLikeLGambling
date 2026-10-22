@@ -19,7 +19,8 @@ public class DiceGame : MonoBehaviour
     [SerializeField] private RunManager run;
 
     [Header("UI")]
-    [SerializeField] private TMP_Text diceText;
+    [SerializeField] private Image firstDieImage;
+    [SerializeField] private Image secondDieImage;
     [SerializeField] private Button underButton;
     [SerializeField] private Button sevenButton;
     [SerializeField] private Button overButton;
@@ -59,7 +60,7 @@ public class DiceGame : MonoBehaviour
 
     private void ResetGame()
     {
-        diceText.text = "?   ?";
+        ShowDice(1, 1, false);
         run.ShowMessage($"Under {TargetTotal}, exactly {TargetTotal}, or over {TargetTotal}?");
     }
 
@@ -74,7 +75,7 @@ public class DiceGame : MonoBehaviour
         int secondDie = RollDie();
         int total = firstDie + secondDie;
 
-        diceText.text = $"{firstDie}   {secondDie}";
+        ShowDice(firstDie, secondDie, true);
 
         int chipChange;
         string message;
@@ -98,6 +99,16 @@ public class DiceGame : MonoBehaviour
         return Random.Range(1, DiceSides + 1);
     }
 
+    // Before the first roll the dice are faded, so it's clear nothing has been rolled yet
+    private void ShowDice(int first, int second, bool rolled)
+    {
+        Color color = rolled ? Color.white : new Color(1f, 1f, 1f, 0.35f);
+
+        firstDieImage.sprite = CardArt.GetDie(first);
+        secondDieImage.sprite = CardArt.GetDie(second);
+        firstDieImage.color = color;
+        secondDieImage.color = color;
+    }
     private bool IsWinningTotal(GuessType guess, int total)
     {
         return guess switch

@@ -18,7 +18,7 @@ public class HighLowGame : MonoBehaviour
     [SerializeField] private RunManager run;
 
     [Header("UI")]
-    [SerializeField] private TMP_Text cardText;
+    [SerializeField] private Image cardImage;
     [SerializeField] private Button higherButton;
     [SerializeField] private Button lowerButton;
     [SerializeField] private Button tieButton;
@@ -32,6 +32,7 @@ public class HighLowGame : MonoBehaviour
     private TMP_Text tieButtonText;
 
     private int currentCard;   // 1 = A, 11 = J, 12 = Q, 13 = K
+    private int currentSuit;   // Only for the picture: High-Low ignores suits
 
     // Awake runs before any Start, so everything is ready when the run begins
     private void Awake()
@@ -61,7 +62,7 @@ public class HighLowGame : MonoBehaviour
 
     private void ResetGame()
     {
-        currentCard = DrawPlayableCard();
+        SetCard(DrawPlayableCard());
         run.ShowMessage("Higher, lower or tie?");
     }
 
@@ -112,12 +113,12 @@ public class HighLowGame : MonoBehaviour
             }
         }
 
-        currentCard = nextCard;
+        SetCard(nextCard);
 
         // After a tie or an A/K, deal a fresh card so the table visibly changes
         if (isTie || IsExtremeCard(currentCard))
         {
-            currentCard = DrawPlayableCardExcept(nextCard);
+            SetCard(DrawPlayableCardExcept(nextCard));
             message += $"\n{CardName(nextCard)} drawn. Dealing a new card.";
         }
 
@@ -197,6 +198,14 @@ public class HighLowGame : MonoBehaviour
         return card;
     }
 
+
+    // Set the card on the table and give it a random suit for its picture
+    private void SetCard(int value)
+    {
+        currentCard = value;
+        currentSuit = Random.Range(0, 4);
+    }
+
     private string CardName(int value)
     {
         return value switch
@@ -217,7 +226,7 @@ public class HighLowGame : MonoBehaviour
 
     private void RefreshUI()
     {
-        cardText.text = CardName(currentCard);
+        cardImage.sprite = CardArt.GetCard(currentCard, currentSuit);
 
         higherButtonText.text = GuessButtonLabel("HIGHER", GuessType.Higher);
         lowerButtonText.text = GuessButtonLabel("LOWER", GuessType.Lower);
