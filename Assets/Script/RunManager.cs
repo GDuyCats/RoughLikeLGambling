@@ -50,7 +50,9 @@ public class RunManager : MonoBehaviour
     [SerializeField] private int revealBossFromRound = 7;
     [SerializeField] private int playerMaxHealth = 100;   // Base health before the character's bonus
     [SerializeField] private BossCombat bossCombat;
-
+    [SerializeField] private int overtimeStartPlay = 10;          // Overtime begins on this play of the boss fight
+    [SerializeField] private float overtimeRampPerPlay = 0.1f;
+    
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
     [SerializeField] private int betAmount = 10;
@@ -86,14 +88,14 @@ public class RunManager : MonoBehaviour
     private int playerHealth;
     private int bossHealth;
     private bool isBossAttacking;
-
+    private int shieldsLeft;   // Boss attacks that will be blocked completely (Lucky Charm)
     public bool CanPlay => !isGameOver && !upgradePanel.activeSelf && !characterPanel.activeSelf && !isBossAttacking;
     public int PlaysLeft => playsLeft;
     public int RoundNumber => roundNumber;
     public int Chips => chips;
     public int BetLevel => betLevel;
     public int MaxBetLevel => startingMaxBetLevel + GetUpgradeTotal(UpgradeType.ExtraBetLevel);
-    public int MaxHealth => playerMaxHealth + (character != null ? character.MaxHealthBonus : 0);
+    public int MaxHealth => playerMaxHealth + (character != null ? character.MaxHealthBonus : 0) + GetUpgradeTotal(UpgradeType.MaxHealth);
     public bool HasPlayedThisRound => playsUsedThisRound > 0;
     public bool IsCurseRound => currentCurse != null;
     public bool IsFinalRound => roundNumber == finalRound;
@@ -103,6 +105,10 @@ public class RunManager : MonoBehaviour
     public bool CanPerfectParry => character == null || character.CanPerfectParry;
     public bool CanBlock => character == null || character.CanBlock;
 
+    // 1.0 at first, then 1.1, 1.2, 1.3... once the boss fight goes into overtime
+    public float OvertimeMultiplier => IsBossFight && playsUsedThisRound >= overtimeStartPlay
+        ? 1f + overtimeRampPerPlay * (playsUsedThisRound - overtimeStartPlay + 1)
+        : 1f;
     public bool IsMinigameBusy { get; private set; }
 
     private void Start()
@@ -231,31 +237,58 @@ public class RunManager : MonoBehaviour
     private void HandleBossPlay(int chipChange, string message)
     {
         playsUsedThisRound++;
+        // Overtime: the longer the fight, the more damage both sides deal
+        float overtime = OvertimeMultiplier;
 
-        // A lost hand: the boss attacks, and the player defends as their chibi allows
-        if (chipChange < 0 && bossCombat != null)
+        if (overtime > 1f)
         {
-            string defenseHint = CanPerfectParry ? "RIGHT-CLICK to parry!"
-                : CanBlock ? "Hold RIGHT-CLICK to block!"
-                : "Brace yourself!";
-
-            isBossAttacking = true;
-            messageText.text = message + $"\n{finalBoss.DisplayName} attacks! {defenseHint}";
-            bossCombat.StartAttack(-chipChange, CanPerfectParry, CanBlock, FinishBossAttack);
-            UpdateUI();
-            return;
+            chipChange = Mathf.RoundToInt(chipChange * overtime);
+            message += $"\nOvertime x{overtime:0.0}!";
         }
+        if (chipChange < 0)
+        {
+            // Lucky Charm: a shield cancels the attack completely
+            if (shieldsLeft > 0)
+            {
+                shieldsLeft--;
+                messageText.text = message + $"\nYour shield blocks {finalBoss.DisplayName}'s attack!";
+                UpdateUI();
+                return;
+            }
 
-        if (chipChange > 0)
-        {
-            bossHealth = Mathf.Max(0, bossHealth - chipChange);
-            message += $"\nYou hit {finalBoss.DisplayName} for {chipChange} damage!";
-        }
-        else if (chipChange < 0)
-        {
+            if (bossCombat != null)
+            {
+                string defenseHint = CanPerfectParry ? "RIGHT-CLICK to parry!"
+                    : CanBlock ? "Hold RIGHT-CLICK to block!"
+                    : "Brace yourself!";
+
+                float windowBonus = GetUpgradeTotal(UpgradeType.PerfectWindowMs) / 1000f;
+                int rewardBonus = GetUpgradeTotal(UpgradeType.ParryRewardPercent);
+
+                isBossAttacking = true;
+                messageText.text = message + $"\n{finalBoss.DisplayName} attacks! {defenseHint}";
+                bossCombat.StartAttack(-chipChange, CanPerfectParry, CanBlock, windowBonus, rewardBonus, FinishBossAttack);
+                UpdateUI();
+                return;
+            }
+
             int damage = -chipChange;
             playerHealth = Mathf.Max(0, playerHealth - damage);
             message += $"\n{finalBoss.DisplayName} hits you for {damage} damage!";
+        }
+        else if (chipChange > 0)
+        {
+            bossHealth = Mathf.Max(0, bossHealth - chipChange);
+            message += $"\nYou hit {finalBoss.DisplayName} for {chipChange} damage!";
+
+            // Vampire Chips: heal a share of the damage dealt
+            int heal = Mathf.RoundToInt(chipChange * GetUpgradeTotal(UpgradeType.BossLifesteal) / 100f);
+
+            if (heal > 0)
+            {
+                playerHealth = Mathf.Min(MaxHealth, playerHealth + heal);
+                message += $" You heal {heal} HP.";
+            }
         }
         else
         {
@@ -266,7 +299,6 @@ public class RunManager : MonoBehaviour
         CheckBossFightEnd();
         UpdateUI();
     }
-
     private void FinishBossAttack(AttackOutcome outcome)
     {
         isBossAttacking = false;
@@ -394,6 +426,12 @@ public class RunManager : MonoBehaviour
         if (IsBossFight)
         {
             bossHealth = finalBoss.MaxHealth;
+            shieldsLeft = GetUpgradeTotal(UpgradeType.BossShield);
+        }
+        else
+        {
+            // Health is only lost in the boss fight, so keep it full (this also applies Tough Skin)
+            playerHealth = MaxHealth;
         }
 
         RoundStarted?.Invoke();
@@ -505,9 +543,21 @@ public class RunManager : MonoBehaviour
 
     private List<Upgrade> PickRandomUpgrades(int count)
     {
-        List<Upgrade> candidates = new List<Upgrade>();
+        // Upgrades the chosen chibi can actually use
+        List<Upgrade> allowed = new List<Upgrade>();
 
         foreach (Upgrade upgrade in upgradePool)
+        {
+            if (!upgrade.RequiresPerfectParry || CanPerfectParry)
+            {
+                allowed.Add(upgrade);
+            }
+        }
+
+        // After a curse round, only Rare and Legendary
+        List<Upgrade> candidates = new List<Upgrade>();
+
+        foreach (Upgrade upgrade in allowed)
         {
             if (!lastRoundWasCurse || upgrade.Rarity != UpgradeRarity.Common)
             {
@@ -517,7 +567,7 @@ public class RunManager : MonoBehaviour
 
         if (candidates.Count == 0)
         {
-            candidates.AddRange(upgradePool);
+            candidates.AddRange(allowed);
         }
 
         List<Upgrade> result = new List<Upgrade>();
@@ -531,7 +581,6 @@ public class RunManager : MonoBehaviour
 
         return result;
     }
-
     private int PickWeightedIndex(List<Upgrade> candidates)
     {
         int totalWeight = 0;
@@ -638,11 +687,53 @@ public class RunManager : MonoBehaviour
     {
         return type switch
         {
-            UpgradeType.WinPayoutPercent or UpgradeType.RoundEndInterest => "%",
+            UpgradeType.WinPayoutPercent or UpgradeType.RoundEndInterest
+                or UpgradeType.BossLifesteal or UpgradeType.ParryRewardPercent => "%",
             UpgradeType.ExtraGuesses => " plays",
             UpgradeType.ExtraBetLevel => " bet level",
+            UpgradeType.MaxHealth => " HP",
+            UpgradeType.BossShield => " shield",
+            UpgradeType.PerfectWindowMs => " ms",
             _ => " chips"
         };
+    }
+
+    // Combat numbers for the Stats panel. Bonuses at 0 are hidden.
+    private string BuildCombatStatsText()
+    {
+        string text = "";
+
+        int bonusHealth = GetUpgradeTotal(UpgradeType.MaxHealth);
+        if (bonusHealth > 0)
+        {
+            text += $"\nMax health: +{bonusHealth}";
+        }
+
+        int lifesteal = GetUpgradeTotal(UpgradeType.BossLifesteal);
+        if (lifesteal > 0)
+        {
+            text += $"\nBoss fight lifesteal: {lifesteal}%";
+        }
+
+        int shields = IsBossFight ? shieldsLeft : GetUpgradeTotal(UpgradeType.BossShield);
+        if (shields > 0)
+        {
+            text += $"\nShields: {shields}";
+        }
+
+        int parryReward = GetUpgradeTotal(UpgradeType.ParryRewardPercent);
+        if (parryReward > 0)
+        {
+            text += $"\nParry rewards: +{parryReward}%";
+        }
+
+        int windowBonus = GetUpgradeTotal(UpgradeType.PerfectWindowMs);
+        if (windowBonus > 0)
+        {
+            text += $"\nPerfect window: +{windowBonus} ms";
+        }
+
+        return text;
     }
 
     private int GetNextCurseRound()
@@ -702,6 +793,7 @@ public class RunManager : MonoBehaviour
         {
             text += $"\nRound interest: {interest}%";
         }
+        text += BuildCombatStatsText();
 
         if (IsBossFight)
         {
@@ -764,8 +856,12 @@ public class RunManager : MonoBehaviour
 
         if (IsBossFight)
         {
+            string overtimeLine = OvertimeMultiplier > 1f
+                ? $"<color=#FF6B6B>OVERTIME x{OvertimeMultiplier:0.0}: all damage increased</color>"
+                : $"Overtime starts on play {overtimeStartPlay}";
+
             bossText.text = $"<color=#FFD54F>FINAL BOSS: {finalBoss.DisplayName}</color>   HP {bossHealth}/{finalBoss.MaxHealth}\n"
-                + "<size=80%>Wins deal damage. Losses hurt you instead of costing chips.</size>";
+                + $"<size=80%>Wins deal damage. Losses hurt you instead of costing chips.\n{overtimeLine}</size>";
         }
         else if (IsFinalRound)
         {
