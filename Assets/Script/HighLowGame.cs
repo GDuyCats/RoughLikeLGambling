@@ -1,3 +1,4 @@
+using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -27,14 +28,18 @@ public class HighLowGame : MonoBehaviour
     [SerializeField] private float payoutMultiplier = 1.2f;
     [SerializeField] private int baseWinBonus = 3;
 
+    [Header("Animation")]
+    [SerializeField] private float flipTime = 0.25f;     // Time to turn a card over
+    [SerializeField] private float revealPause = 0.4f;   // Pause on the drawn card before a fresh one is dealt
+
     private TMP_Text higherButtonText;
     private TMP_Text lowerButtonText;
     private TMP_Text tieButtonText;
 
     private int currentCard;   // 1 = A, 11 = J, 12 = Q, 13 = K
     private int currentSuit;   // Only for the picture: High-Low ignores suits
+    private bool isAnimating;
 
-    // Awake runs before any Start, so everything is ready when the run begins
     private void Awake()
     {
         higherButtonText = higherButton.GetComponentInChildren<TMP_Text>();
@@ -46,15 +51,13 @@ public class HighLowGame : MonoBehaviour
         tieButton.onClick.AddListener(() => Guess(GuessType.Tie));
     }
 
-    // Start listening to the RunManager's events
-    // Runs every time this minigame is switched on: listen for updates and start fresh
     private void OnEnable()
     {
         run.StateChanged += RefreshUI;
         ResetGame();
         RefreshUI();
     }
-    // Stop listening when this minigame is switched off
+
     private void OnDisable()
     {
         run.StateChanged -= RefreshUI;
@@ -62,16 +65,29 @@ public class HighLowGame : MonoBehaviour
 
     private void ResetGame()
     {
+        // If the table was closed in the middle of an animation, start clean
+        isAnimating = false;
+        cardImage.rectTransform.localScale = Vector3.one;
+
         SetCard(DrawPlayableCard());
         run.ShowMessage("Higher, lower or tie?");
     }
 
     private void Guess(GuessType guess)
     {
-        if (!run.CanPlay)
+        if (!run.CanPlay || isAnimating)
         {
             return;
         }
+
+        StartCoroutine(GuessRoutine(guess));
+    }
+
+    // Work out the result first, then show the cards turning over, then report to the RunManager
+    private IEnumerator GuessRoutine(GuessType guess)
+    {
+        isAnimating = true;
+        run.SetMinigameBusy(true);
 
         int nextCard = DrawCard();
         bool isTie = nextCard == currentCard;
@@ -114,16 +130,51 @@ public class HighLowGame : MonoBehaviour
         }
 
         SetCard(nextCard);
+        Sprite revealedCard = CardArt.GetCard(currentCard, currentSuit);
 
-        // After a tie or an A/K, deal a fresh card so the table visibly changes
-        if (isTie || IsExtremeCard(currentCard))
+        // After a tie or an A/K, a fresh card is dealt so the table visibly changes
+        bool dealNewCard = isTie || IsExtremeCard(currentCard);
+
+        if (dealNewCard)
         {
             SetCard(DrawPlayableCardExcept(nextCard));
             message += $"\n{CardName(nextCard)} drawn. Dealing a new card.";
         }
 
-        // Hand the result to the RunManager, which updates chips, rounds and UI
+        yield return FlipTo(revealedCard);
+
+        if (dealNewCard)
+        {
+            yield return new WaitForSeconds(revealPause);
+            yield return FlipTo(CardArt.GetCard(currentCard, currentSuit));
+        }
+
+        isAnimating = false;
+        run.SetMinigameBusy(false);
         run.FinishPlay(chipChange, message);
+    }
+
+    // Squash the card to nothing, swap the picture, then stretch it back: it looks like turning over
+    private IEnumerator FlipTo(Sprite sprite)
+    {
+        RectTransform card = cardImage.rectTransform;
+        float halfTime = flipTime / 2f;
+
+        for (float t = 0f; t < halfTime; t += Time.deltaTime)
+        {
+            card.localScale = new Vector3(1f - t / halfTime, 1f, 1f);
+            yield return null;
+        }
+
+        cardImage.sprite = sprite;
+
+        for (float t = 0f; t < halfTime; t += Time.deltaTime)
+        {
+            card.localScale = new Vector3(t / halfTime, 1f, 1f);
+            yield return null;
+        }
+
+        card.localScale = Vector3.one;
     }
 
     private int CountWinningCards(GuessType guess)
@@ -185,7 +236,6 @@ public class HighLowGame : MonoBehaviour
         return Random.Range(2, CardCount);
     }
 
-    // Draw a playable card that is different from the given value
     private int DrawPlayableCardExcept(int value)
     {
         int card = DrawPlayableCard();
@@ -198,8 +248,6 @@ public class HighLowGame : MonoBehaviour
         return card;
     }
 
-
-    // Set the card on the table and give it a random suit for its picture
     private void SetCard(int value)
     {
         currentCard = value;
@@ -226,6 +274,15 @@ public class HighLowGame : MonoBehaviour
 
     private void RefreshUI()
     {
+        // During an animation the coroutine controls the card, and the buttons stay locked
+        if (isAnimating)
+        {
+            higherButton.interactable = false;
+            lowerButton.interactable = false;
+            tieButton.interactable = false;
+            return;
+        }
+
         cardImage.sprite = CardArt.GetCard(currentCard, currentSuit);
 
         higherButtonText.text = GuessButtonLabel("HIGHER", GuessType.Higher);

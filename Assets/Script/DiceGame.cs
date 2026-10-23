@@ -1,3 +1,4 @@
+using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -29,9 +30,16 @@ public class DiceGame : MonoBehaviour
     [SerializeField] private float payoutMultiplier = 1.2f;
     [SerializeField] private int baseWinBonus = 3;
 
+    [Header("Animation")]
+    [SerializeField] private float rollTime = 0.7f;              // How long the dice tumble
+    [SerializeField] private float faceChangeInterval = 0.06f;   // How often the faces change while tumbling
+    [SerializeField] private float shakeAngle = 20f;             // How much the dice wobble while tumbling
+
     private TMP_Text underButtonText;
     private TMP_Text sevenButtonText;
     private TMP_Text overButtonText;
+
+    private bool isRolling;
 
     private void Awake()
     {
@@ -44,7 +52,6 @@ public class DiceGame : MonoBehaviour
         overButton.onClick.AddListener(() => Guess(GuessType.Over));
     }
 
-    // Runs every time this minigame is switched on: listen for updates and start fresh
     private void OnEnable()
     {
         run.StateChanged += RefreshUI;
@@ -52,7 +59,6 @@ public class DiceGame : MonoBehaviour
         RefreshUI();
     }
 
-    // Stop listening when this minigame is switched off
     private void OnDisable()
     {
         run.StateChanged -= RefreshUI;
@@ -60,21 +66,47 @@ public class DiceGame : MonoBehaviour
 
     private void ResetGame()
     {
+        isRolling = false;
+        firstDieImage.rectTransform.localRotation = Quaternion.identity;
+        secondDieImage.rectTransform.localRotation = Quaternion.identity;
+
         ShowDice(1, 1, false);
         run.ShowMessage($"Under {TargetTotal}, exactly {TargetTotal}, or over {TargetTotal}?");
     }
 
     private void Guess(GuessType guess)
     {
-        if (!run.CanPlay)
+        if (!run.CanPlay || isRolling)
         {
             return;
         }
+
+        StartCoroutine(RollRoutine(guess));
+    }
+
+    // Decide the result first, let the dice tumble, then land on the real result
+    private IEnumerator RollRoutine(GuessType guess)
+    {
+        isRolling = true;
+        run.SetMinigameBusy(true);
 
         int firstDie = RollDie();
         int secondDie = RollDie();
         int total = firstDie + secondDie;
 
+        float endTime = Time.time + rollTime;
+
+        while (Time.time < endTime)
+        {
+            ShowDice(RollDie(), RollDie(), true);
+            firstDieImage.rectTransform.localRotation = Quaternion.Euler(0f, 0f, Random.Range(-shakeAngle, shakeAngle));
+            secondDieImage.rectTransform.localRotation = Quaternion.Euler(0f, 0f, Random.Range(-shakeAngle, shakeAngle));
+
+            yield return new WaitForSeconds(faceChangeInterval);
+        }
+
+        firstDieImage.rectTransform.localRotation = Quaternion.identity;
+        secondDieImage.rectTransform.localRotation = Quaternion.identity;
         ShowDice(firstDie, secondDie, true);
 
         int chipChange;
@@ -91,6 +123,8 @@ public class DiceGame : MonoBehaviour
             message = $"Rolled {total}! {chipChange} chips";
         }
 
+        isRolling = false;
+        run.SetMinigameBusy(false);
         run.FinishPlay(chipChange, message);
     }
 
@@ -99,7 +133,6 @@ public class DiceGame : MonoBehaviour
         return Random.Range(1, DiceSides + 1);
     }
 
-    // Before the first roll the dice are faded, so it's clear nothing has been rolled yet
     private void ShowDice(int first, int second, bool rolled)
     {
         Color color = rolled ? Color.white : new Color(1f, 1f, 1f, 0.35f);
@@ -109,6 +142,7 @@ public class DiceGame : MonoBehaviour
         firstDieImage.color = color;
         secondDieImage.color = color;
     }
+
     private bool IsWinningTotal(GuessType guess, int total)
     {
         return guess switch
@@ -119,7 +153,6 @@ public class DiceGame : MonoBehaviour
         };
     }
 
-    // Check all 36 possible dice combinations and count how many win this guess
     private int CountWinningCombos(GuessType guess)
     {
         int count = 0;
@@ -138,7 +171,6 @@ public class DiceGame : MonoBehaviour
         return count;
     }
 
-    // Same payout idea as High-Low: riskier guesses pay more
     private int GetWinAmount(GuessType guess)
     {
         int winningCombos = CountWinningCombos(guess);
@@ -165,6 +197,15 @@ public class DiceGame : MonoBehaviour
 
     private void RefreshUI()
     {
+        // While the dice tumble, the buttons stay locked
+        if (isRolling)
+        {
+            underButton.interactable = false;
+            sevenButton.interactable = false;
+            overButton.interactable = false;
+            return;
+        }
+
         underButtonText.text = $"UNDER {TargetTotal}\n+{GetWinAmount(GuessType.Under)}";
         sevenButtonText.text = $"SEVEN\n+{GetWinAmount(GuessType.Seven)}";
         overButtonText.text = $"OVER {TargetTotal}\n+{GetWinAmount(GuessType.Over)}";
