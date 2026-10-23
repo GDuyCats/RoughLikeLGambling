@@ -20,6 +20,9 @@ public class BlackjackGame : MonoBehaviour
     [Header("UI")]
     [SerializeField] private TMP_Text dealerText;
     [SerializeField] private TMP_Text playerText;
+    [SerializeField] private RectTransform dealerHandArea;   // Card pictures line up here
+    [SerializeField] private RectTransform playerHandArea;
+    [SerializeField] private Image cardPrefab;                // The template card picture
     [SerializeField] private Button dealButton;
     [SerializeField] private Button hitButton;
     [SerializeField] private Button standButton;
@@ -387,25 +390,49 @@ public class BlackjackGame : MonoBehaviour
 
         return string.Join("   ", names);
     }
+    // Reuses card pictures already in the area, adds new ones when needed, hides the extras
+    private void ShowHand(RectTransform area, List<int> hand, bool hideSecondCard)
+    {
+        for (int i = 0; i < hand.Count; i++)
+        {
+            Image cardImage = i < area.childCount
+                ? area.GetChild(i).GetComponent<Image>()
+                : Instantiate(cardPrefab, area);
 
+            bool faceDown = hideSecondCard && i == 1;
+
+            cardImage.gameObject.SetActive(true);
+            cardImage.sprite = faceDown
+                ? CardArt.GetCardBack()
+                : CardArt.GetCard(GetRank(hand[i]), GetSuit(hand[i]));
+        }
+
+        for (int i = hand.Count; i < area.childCount; i++)
+        {
+            area.GetChild(i).gameObject.SetActive(false);
+        }
+    }
     private void RefreshUI()
     {
+        // Card pictures. The dealer's second card stays face down during a hand.
+        ShowHand(dealerHandArea, dealerHand, isHandInProgress);
+        ShowHand(playerHandArea, playerHand, false);
+
+        // The labels now only show the totals
         if (dealerHand.Count == 0)
         {
-            dealerText.text = "Dealer:";
+            dealerText.text = "Dealer";
         }
         else if (isHandInProgress)
         {
-            dealerText.text = $"Dealer:   {HandText(dealerHand, true)}";
+            dealerText.text = $"Dealer\n{GetCardValue(GetRank(dealerHand[0]))} + ?";
         }
         else
         {
-            dealerText.text = $"Dealer:   {HandText(dealerHand, false)}   ({HandValue(dealerHand)})";
+            dealerText.text = $"Dealer\n{HandValue(dealerHand)}";
         }
 
-        playerText.text = playerHand.Count == 0
-            ? "You:"
-            : $"You:   {HandText(playerHand, false)}   ({HandValue(playerHand)})";
+        playerText.text = playerHand.Count == 0 ? "You" : $"You\n{HandValue(playerHand)}";
 
         // DEAL between hands; HIT, STAND, DOUBLE, SURRENDER during a hand
         dealButton.gameObject.SetActive(!isHandInProgress);

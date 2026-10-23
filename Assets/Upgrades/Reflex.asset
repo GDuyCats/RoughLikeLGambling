@@ -12,10 +12,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fa69e484cc793d94e80522053b8bdb7a, type: 3}
   m_Name: Reflex
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
-  displayName: 
-  description: 
-  type: 0
-  value: 0
-  rarity: 0
+  displayName: Reflex
+  description: perfect parry window +40 ms
+  type: 12
+  value: 40
+  rarity: 2
   diminishingStacks: 1
-  requiresPerfectParry: 0
+  requiresPerfectParry: 1

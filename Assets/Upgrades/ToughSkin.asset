@@ -12,10 +12,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fa69e484cc793d94e80522053b8bdb7a, type: 3}
   m_Name: ToughSkin
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
-  displayName: 
-  description: 
-  type: 0
-  value: 0
+  displayName: Tough Skin
+  description: +20 max health
+  type: 8
+  value: 20
   rarity: 0
   diminishingStacks: 1
   requiresPerfectParry: 0

@@ -12,10 +12,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fa69e484cc793d94e80522053b8bdb7a, type: 3}
   m_Name: VampireChips
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
-  displayName: 
-  description: 
-  type: 0
-  value: 0
-  rarity: 0
+  displayName: Vampire Chips
+  description: 'Boss fight: heal 20% of the damage you deal'
+  type: 9
+  value: 20
+  rarity: 1
   diminishingStacks: 1
   requiresPerfectParry: 0

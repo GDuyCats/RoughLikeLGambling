@@ -17,3 +17,11 @@ MonoBehaviour:
   favoriteGame: 0
   maxHealth: 250
   jackpot: 500
+  projectileChance: 0.5
+  minBullets: 2
+  maxBullets: 4
+  bulletMinGap: 0.2
+  bulletMaxGap: 0.7
+  meleeMinWindup: 0.5
+  meleeMaxWindup: 1.2
+  parryChance: 0.25

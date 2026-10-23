@@ -12,10 +12,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fa69e484cc793d94e80522053b8bdb7a, type: 3}
   m_Name: LuckyCharm
   m_EditorClassIdentifier: Assembly-CSharp::Upgrade
-  displayName: 
-  description: 
-  type: 0
-  value: 0
+  displayName: Lucky Charm
+  description: 'Boss fight: block one attack completely'
+  type: 10
+  value: 1
   rarity: 0
-  diminishingStacks: 1
+  diminishingStacks: 0
   requiresPerfectParry: 0
