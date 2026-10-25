@@ -4,7 +4,8 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-// The Blackjack minigame: get closer to 21 than the dealer without going over
+// The Blackjack minigame: get closer to 21 than the dealer without going over.
+// Cards are dealt onto the table in two rows: the dealer's and the player's.
 public class BlackjackGame : MonoBehaviour
 {
     private const int BlackjackValue = 21;
@@ -12,40 +13,40 @@ public class BlackjackGame : MonoBehaviour
     private const int DeckSize = 52;
     private const int RanksPerSuit = 13;
 
-    // If these show up as empty squares, replace them with "S", "H", "D", "C"
-    private static readonly string[] SuitSymbols = { "♠", "♥", "♦", "♣" };
-
     [Header("Run")]
     [SerializeField] private RunManager run;
 
     [Header("UI")]
     [SerializeField] private TMP_Text dealerText;
     [SerializeField] private TMP_Text playerText;
-    [SerializeField] private RectTransform dealerHandArea;   // Card pictures line up here
-    [SerializeField] private RectTransform playerHandArea;
-    [SerializeField] private Image cardPrefab;
-
-    [Header("Animation")]
-    [SerializeField] private float popTime = 0.15f;    // How long a new card takes to pop in
-    [SerializeField] private float flipTime = 0.25f;   // How long the dealer's hidden card takes to turn over
-    [SerializeField] private float dealerDrawDelay = 0.6f;
-    private int dealerCardsShown;   // How many dealer cards are already on screen
-    private int playerCardsShown;
-    private bool dealerCardHidden;  // Was the dealer's second card face down last time we drew the table?               // The template card picture
     [SerializeField] private Button dealButton;
     [SerializeField] private Button hitButton;
     [SerializeField] private Button standButton;
     [SerializeField] private Button doubleButton;
     [SerializeField] private Button surrenderButton;
 
+    [Header("Table")]
+    [SerializeField] private TableCard cardPrefab;
+    [SerializeField] private Transform deckSpot;         // New cards come from here
+    [SerializeField] private Transform dealerRowStart;   // The dealer's first card; the rest line up to the right
+    [SerializeField] private Transform playerRowStart;
+    [SerializeField] private Transform discardSpot;      // Old cards fly away here
+    [SerializeField] private float cardSpacing = 2f;     // Distance between cards in a row (a bit more than a card's width)
+
     [Header("Rules")]
     [SerializeField] private float winMultiplier = 1.5f;
     [SerializeField] private float blackjackMultiplier = 2.5f;
     [SerializeField] private int baseWinBonus = 3;
 
+    [Header("Animation")]
+    [SerializeField] private float dealDelay = 0.2f;         // Time between cards when dealing a new hand
+    [SerializeField] private float dealerDrawDelay = 0.6f;   // Pause between the dealer's cards
+
     private readonly List<int> deck = new List<int>();
     private readonly List<int> playerHand = new List<int>();
     private readonly List<int> dealerHand = new List<int>();
+    private readonly List<TableCard> playerCards = new List<TableCard>();
+    private readonly List<TableCard> dealerCards = new List<TableCard>();
 
     private TMP_Text dealButtonText;
     private TMP_Text doubleButtonText;
@@ -53,7 +54,11 @@ public class BlackjackGame : MonoBehaviour
 
     private bool isHandInProgress;
     private bool isDoubled;
-    private bool isDealerTurn;   // The player is done, the dealer is drawing
+    private bool isDealerTurn;
+    private bool isAnimating;          // Cards are moving: buttons stay locked
+    private bool dealerCardRevealed;   // Has the dealer's face-down card been turned over?
+    private int runningAnimations;     // How many card animations are still playing
+
     private void Awake()
     {
         dealButtonText = dealButton.GetComponentInChildren<TMP_Text>();
@@ -81,63 +86,102 @@ public class BlackjackGame : MonoBehaviour
 
     private void ResetGame()
     {
+        StopAllCoroutines();
+        ClearTable();
+
         playerHand.Clear();
         dealerHand.Clear();
         isHandInProgress = false;
         isDoubled = false;
+        isDealerTurn = false;
+        isAnimating = false;
+        dealerCardRevealed = false;
+
         run.SetMinigameBusy(false);
         run.ShowMessage("Press DEAL to start a hand.");
-        isDealerTurn = false;
     }
+
+    // ---------- Player actions ----------
 
     private void Deal()
     {
-        if (!run.CanPlay || isHandInProgress)
+        if (!run.CanPlay || isHandInProgress || isAnimating)
         {
             return;
         }
 
+        StartCoroutine(DealRoutine());
+    }
+
+    private IEnumerator DealRoutine()
+    {
+        isAnimating = true;
+        isHandInProgress = true;
+        isDoubled = false;
+        dealerCardRevealed = false;
+        run.SetMinigameBusy(true);
+
+        // Clear last hand's cards off the table first
+        yield return ClearTableRoutine();
+
         BuildDeck();
-        dealerCardsShown = 0;
-        playerCardsShown = 0;
         playerHand.Clear();
         dealerHand.Clear();
-        isDoubled = false;
 
-        playerHand.Add(DrawCard());
-        dealerHand.Add(DrawCard());
-        playerHand.Add(DrawCard());
-        dealerHand.Add(DrawCard());
+        // Player, dealer, player, dealer. The cards fly one after another, overlapping a little.
+        StartCoroutine(Track(DealCardRoutine(playerHand, playerCards, playerRowStart, true)));
+        yield return new WaitForSeconds(dealDelay);
+        StartCoroutine(Track(DealCardRoutine(dealerHand, dealerCards, dealerRowStart, true)));
+        yield return new WaitForSeconds(dealDelay);
+        StartCoroutine(Track(DealCardRoutine(playerHand, playerCards, playerRowStart, true)));
+        yield return new WaitForSeconds(dealDelay);
+        StartCoroutine(Track(DealCardRoutine(dealerHand, dealerCards, dealerRowStart, false)));
 
-        isHandInProgress = true;
+        // Wait until every card has landed and turned over
+        yield return new WaitUntil(() => runningAnimations == 0);
+        isAnimating = false;
 
+        // A natural blackjack on either side ends the hand right away
         if (IsBlackjack(playerHand) || IsBlackjack(dealerHand))
         {
+            yield return RevealDealerCard();
             FinishHand();
-            return;
+            yield break;
         }
 
         run.ShowMessage("Hit, stand, double or surrender?");
-        run.SetMinigameBusy(true);
+        RefreshUI();
     }
 
     private void Hit()
     {
-        if (!isHandInProgress || isDealerTurn)
+        if (!isHandInProgress || isDealerTurn || isAnimating)
         {
             return;
         }
 
-        playerHand.Add(DrawCard());
+        StartCoroutine(HitRoutine());
+    }
+
+    private IEnumerator HitRoutine()
+    {
+        isAnimating = true;
+        RefreshUI();
+
+        yield return DealCardRoutine(playerHand, playerCards, playerRowStart, true);
+        isAnimating = false;
+
         int value = HandValue(playerHand);
 
         if (value > BlackjackValue)
         {
+            yield return RevealDealerCard();
             FinishHand();
         }
         else if (value == BlackjackValue)
         {
-            Stand();
+            // 21 can't be improved, so stand automatically
+            yield return DealerTurnRoutine();
         }
         else
         {
@@ -148,7 +192,7 @@ public class BlackjackGame : MonoBehaviour
 
     private void Stand()
     {
-        if (!isHandInProgress || isDealerTurn)
+        if (!isHandInProgress || isDealerTurn || isAnimating)
         {
             return;
         }
@@ -156,19 +200,19 @@ public class BlackjackGame : MonoBehaviour
         StartCoroutine(DealerTurnRoutine());
     }
 
-    // The dealer flips the hidden card, then draws one card at a time
+    // The dealer turns the hidden card over, then draws one card at a time
     private IEnumerator DealerTurnRoutine()
     {
         isDealerTurn = true;
         run.ShowMessage("Dealer's turn...");
-        RefreshUI();   // Turns the hidden card over
+        RefreshUI();
 
-        yield return new WaitForSeconds(flipTime + dealerDrawDelay);
+        yield return RevealDealerCard();
+        yield return new WaitForSeconds(dealerDrawDelay);
 
         while (HandValue(dealerHand) < DealerStandValue)
         {
-            dealerHand.Add(DrawCard());
-            RefreshUI();   // The new card pops in
+            yield return DealCardRoutine(dealerHand, dealerCards, dealerRowStart, true);
             yield return new WaitForSeconds(dealerDrawDelay);
         }
 
@@ -184,16 +228,26 @@ public class BlackjackGame : MonoBehaviour
             return;
         }
 
+        StartCoroutine(DoubleRoutine());
+    }
+
+    private IEnumerator DoubleRoutine()
+    {
         isDoubled = true;
-        playerHand.Add(DrawCard());
+        isAnimating = true;
+        RefreshUI();
+
+        yield return DealCardRoutine(playerHand, playerCards, playerRowStart, true);
+        isAnimating = false;
 
         if (HandValue(playerHand) > BlackjackValue)
         {
+            yield return RevealDealerCard();
             FinishHand();
         }
         else
         {
-            Stand();
+            yield return DealerTurnRoutine();
         }
     }
 
@@ -205,6 +259,17 @@ public class BlackjackGame : MonoBehaviour
             return;
         }
 
+        StartCoroutine(SurrenderRoutine());
+    }
+
+    private IEnumerator SurrenderRoutine()
+    {
+        isAnimating = true;
+        RefreshUI();
+
+        yield return RevealDealerCard();
+        isAnimating = false;
+
         int lossAmount = GetSurrenderLoss();
         isHandInProgress = false;
 
@@ -212,16 +277,118 @@ public class BlackjackGame : MonoBehaviour
         run.FinishPlay(-lossAmount, $"Surrendered. -{lossAmount} chips");
     }
 
-    // Double and surrender are only allowed on the first two cards
     private bool CanMakeFirstDecision()
     {
-        return isHandInProgress && !isDealerTurn && playerHand.Count == 2 && run.CanPlay;
+        return isHandInProgress && !isDealerTurn && !isAnimating && playerHand.Count == 2 && run.CanPlay;
     }
 
     private bool CanDoubleDown()
     {
         return CanMakeFirstDecision() && run.Chips >= run.GetCurrentBet() * 2;
     }
+
+    // ---------- Cards on the table ----------
+
+    // Take a card from the deck, fly it to the next spot in the row, and turn it over if face up
+    private IEnumerator DealCardRoutine(List<int> hand, List<TableCard> cards, Transform rowStart, bool faceUp)
+    {
+        int card = DrawCard();
+        hand.Add(card);
+
+        TableCard cardObject = Instantiate(cardPrefab, deckSpot.position, Quaternion.identity);
+        cardObject.SetSprite(CardArt.GetCardBack());
+        cards.Add(cardObject);
+
+        Vector3 slot = rowStart.position + Vector3.right * cardSpacing * (cards.Count - 1);
+        yield return cardObject.MoveTo(slot);
+
+        if (faceUp)
+        {
+            yield return cardObject.FlipTo(CardSprite(card));
+        }
+
+        RefreshUI();
+    }
+
+    private IEnumerator RevealDealerCard()
+    {
+        if (dealerCardRevealed || dealerCards.Count < 2)
+        {
+            yield break;
+        }
+
+        dealerCardRevealed = true;
+        yield return dealerCards[1].FlipTo(CardSprite(dealerHand[1]));
+        RefreshUI();
+    }
+
+    // Counts animations that are playing, so we can wait for all of them to finish
+    private IEnumerator Track(IEnumerator routine)
+    {
+        runningAnimations++;
+        yield return routine;
+        runningAnimations--;
+    }
+
+    private IEnumerator ClearTableRoutine()
+    {
+        foreach (TableCard card in dealerCards)
+        {
+            StartCoroutine(Track(DiscardRoutine(card)));
+        }
+
+        foreach (TableCard card in playerCards)
+        {
+            StartCoroutine(Track(DiscardRoutine(card)));
+        }
+
+        dealerCards.Clear();
+        playerCards.Clear();
+
+        yield return new WaitUntil(() => runningAnimations == 0);
+    }
+
+    private IEnumerator DiscardRoutine(TableCard card)
+    {
+        if (card == null)
+        {
+            yield break;
+        }
+
+        yield return card.MoveTo(discardSpot.position);
+        Destroy(card.gameObject);
+    }
+
+    // Instantly remove every card (used when the table is reset)
+    private void ClearTable()
+    {
+        foreach (TableCard card in dealerCards)
+        {
+            if (card != null)
+            {
+                Destroy(card.gameObject);
+            }
+        }
+
+        foreach (TableCard card in playerCards)
+        {
+            if (card != null)
+            {
+                Destroy(card.gameObject);
+            }
+        }
+
+        dealerCards.Clear();
+        playerCards.Clear();
+        runningAnimations = 0;
+    }
+
+    private Sprite CardSprite(int card)
+    {
+        return CardArt.GetCard(GetRank(card), GetSuit(card));
+    }
+
+    // ---------- Results ----------
 
     private void FinishHand()
     {
@@ -291,7 +458,6 @@ public class BlackjackGame : MonoBehaviour
         run.FinishPlay(chipChange, message);
     }
 
-    // The bet for this hand: doubled after a double down
     private int GetHandBet()
     {
         return run.GetCurrentBet() * (isDoubled ? 2 : 1);
@@ -312,11 +478,12 @@ public class BlackjackGame : MonoBehaviour
         return Mathf.Max(0, GetHandBet() - run.GetUpgradeTotal(UpgradeType.LossReduction));
     }
 
-    // Half of the normal loss, rounded up
     private int GetSurrenderLoss()
     {
         return Mathf.CeilToInt(GetLossAmount() / 2f);
     }
+
+    // ---------- Cards and hands ----------
 
     private void BuildDeck()
     {
@@ -386,127 +553,16 @@ public class BlackjackGame : MonoBehaviour
         return hand.Count == 2 && HandValue(hand) == BlackjackValue;
     }
 
-    private string CardName(int card)
-    {
-        int rank = GetRank(card);
-        int suit = GetSuit(card);
+    // ---------- UI ----------
 
-        string rankName = rank switch
-        {
-            1 => "A",
-            11 => "J",
-            12 => "Q",
-            13 => "K",
-            _ => rank.ToString()
-        };
-
-        string text = rankName + SuitSymbols[suit];
-
-        bool isRed = suit == 1 || suit == 2;
-        return isRed ? $"<color=#D9363E>{text}</color>" : text;
-    }
-
-    private string HandText(List<int> hand, bool hideSecondCard)
-    {
-        List<string> names = new List<string>();
-
-        for (int i = 0; i < hand.Count; i++)
-        {
-            names.Add(hideSecondCard && i == 1 ? "??" : CardName(hand[i]));
-        }
-
-        return string.Join("   ", names);
-    }
-    // Reuses card pictures already in the area, adds new ones when needed, hides the extras.
-    // Cards that weren't on screen before pop in.
-    private void ShowHand(RectTransform area, List<int> hand, bool hideSecondCard, ref int cardsShown)
-    {
-        for (int i = 0; i < hand.Count; i++)
-        {
-            Image cardImage = i < area.childCount
-                ? area.GetChild(i).GetComponent<Image>()
-                : Instantiate(cardPrefab, area);
-
-            bool faceDown = hideSecondCard && i == 1;
-
-            cardImage.gameObject.SetActive(true);
-            cardImage.sprite = faceDown
-                ? CardArt.GetCardBack()
-                : CardArt.GetCard(GetRank(hand[i]), GetSuit(hand[i]));
-
-            if (i >= cardsShown)
-            {
-                StartCoroutine(PopIn(cardImage.rectTransform));
-            }
-        }
-
-        for (int i = hand.Count; i < area.childCount; i++)
-        {
-            area.GetChild(i).gameObject.SetActive(false);
-        }
-
-        cardsShown = hand.Count;
-    }
-
-    // A new card grows from small to full size with a tiny bounce
-    private IEnumerator PopIn(RectTransform card)
-    {
-        for (float t = 0f; t < popTime; t += Time.deltaTime)
-        {
-            float progress = t / popTime;
-            float scale = Mathf.Lerp(0.3f, 1.1f, progress);
-            card.localScale = Vector3.one * scale;
-            yield return null;
-        }
-
-        card.localScale = Vector3.one;
-    }
-
-    // Squash the card, swap the picture, stretch it back: looks like turning it over
-    private IEnumerator FlipCard(Image card, Sprite faceUp)
-    {
-        RectTransform rect = card.rectTransform;
-        float halfTime = flipTime / 2f;
-
-        for (float t = 0f; t < halfTime; t += Time.deltaTime)
-        {
-            rect.localScale = new Vector3(1f - t / halfTime, 1f, 1f);
-            yield return null;
-        }
-
-        card.sprite = faceUp;
-
-        for (float t = 0f; t < halfTime; t += Time.deltaTime)
-        {
-            rect.localScale = new Vector3(t / halfTime, 1f, 1f);
-            yield return null;
-        }
-
-        rect.localScale = Vector3.one;
-    }
     private void RefreshUI()
     {
-        // The dealer's second card stays face down until the dealer's turn (or the end of the hand)
-        bool hideDealerCard = isHandInProgress && !isDealerTurn;
-        bool revealDealerCard = dealerCardHidden && !hideDealerCard && dealerHand.Count >= 2;
-
-        ShowHand(dealerHandArea, dealerHand, hideDealerCard || revealDealerCard, ref dealerCardsShown);
-        ShowHand(playerHandArea, playerHand, false, ref playerCardsShown);
-
-        if (revealDealerCard)
-        {
-            Image hiddenCard = dealerHandArea.GetChild(1).GetComponent<Image>();
-            StartCoroutine(FlipCard(hiddenCard, CardArt.GetCard(GetRank(dealerHand[1]), GetSuit(dealerHand[1]))));
-        }
-
-        dealerCardHidden = hideDealerCard && dealerHand.Count >= 2;
-
-        // The labels now only show the totals
+        // The labels only show the totals; the cards themselves are on the table
         if (dealerHand.Count == 0)
         {
             dealerText.text = "Dealer";
         }
-        else if (hideDealerCard)
+        else if (!dealerCardRevealed && dealerHand.Count >= 2)
         {
             dealerText.text = $"Dealer\n{GetCardValue(GetRank(dealerHand[0]))} + ?";
         }
@@ -524,9 +580,9 @@ public class BlackjackGame : MonoBehaviour
         doubleButton.gameObject.SetActive(isHandInProgress);
         surrenderButton.gameObject.SetActive(isHandInProgress);
 
-        dealButton.interactable = run.CanPlay;
-        hitButton.interactable = run.CanPlay && !isDealerTurn;
-        standButton.interactable = run.CanPlay && !isDealerTurn;
+        dealButton.interactable = run.CanPlay && !isAnimating;
+        hitButton.interactable = run.CanPlay && !isDealerTurn && !isAnimating;
+        standButton.interactable = run.CanPlay && !isDealerTurn && !isAnimating;
         doubleButton.interactable = CanDoubleDown();
         surrenderButton.interactable = CanMakeFirstDecision();
 

@@ -1,9 +1,10 @@
 using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-// The High-Low minigame: only handles card rules, the RunManager handles the rest
+// The High-Low minigame: cards are dealt onto the table. The RunManager handles the rest.
 public class HighLowGame : MonoBehaviour
 {
     private const int CardCount = 13;
@@ -19,18 +20,26 @@ public class HighLowGame : MonoBehaviour
     [SerializeField] private RunManager run;
 
     [Header("UI")]
-    [SerializeField] private Image cardImage;
     [SerializeField] private Button higherButton;
     [SerializeField] private Button lowerButton;
     [SerializeField] private Button tieButton;
+
+    [Header("Table")]
+    [SerializeField] private TableCard cardPrefab;
+    [SerializeField] private Transform deckSpot;      // New cards come from here
+    [SerializeField] private Transform cardSpot;      // The current card
+    [SerializeField] private Transform revealSpot;    // The drawn card is turned over here
+    [SerializeField] private Transform discardSpot;   // Used cards fly away here
 
     [Header("Rules")]
     [SerializeField] private float payoutMultiplier = 1.2f;
     [SerializeField] private int baseWinBonus = 3;
 
     [Header("Animation")]
-    [SerializeField] private float flipTime = 0.25f;     // Time to turn a card over
-    [SerializeField] private float revealPause = 0.4f;   // Pause on the drawn card before a fresh one is dealt
+    [SerializeField] private float revealPause = 0.4f;   // Pause on the drawn card before the table is tidied
+
+    private readonly List<TableCard> cardsOnTable = new List<TableCard>();
+    private TableCard currentCardObject;
 
     private TMP_Text higherButtonText;
     private TMP_Text lowerButtonText;
@@ -63,14 +72,28 @@ public class HighLowGame : MonoBehaviour
         run.StateChanged -= RefreshUI;
     }
 
+    // Clear the table and deal a fresh opening card
     private void ResetGame()
     {
-        // If the table was closed in the middle of an animation, start clean
-        isAnimating = false;
-        cardImage.rectTransform.localScale = Vector3.one;
+        StopAllCoroutines();
+        ClearTable();
 
         SetCard(DrawPlayableCard());
         run.ShowMessage("Higher, lower or tie?");
+        StartCoroutine(DealOpeningCard());
+    }
+
+    private IEnumerator DealOpeningCard()
+    {
+        isAnimating = true;
+        RefreshUI();
+
+        currentCardObject = SpawnCard();
+        yield return currentCardObject.MoveTo(cardSpot.position);
+        yield return currentCardObject.FlipTo(CurrentSprite());
+
+        isAnimating = false;
+        RefreshUI();
     }
 
     private void Guess(GuessType guess)
@@ -83,7 +106,7 @@ public class HighLowGame : MonoBehaviour
         StartCoroutine(GuessRoutine(guess));
     }
 
-    // Work out the result first, then show the cards turning over, then report to the RunManager
+    // Work out the result first, then deal and turn the cards, then report to the RunManager
     private IEnumerator GuessRoutine(GuessType guess)
     {
         isAnimating = true;
@@ -130,7 +153,7 @@ public class HighLowGame : MonoBehaviour
         }
 
         SetCard(nextCard);
-        Sprite revealedCard = CardArt.GetCard(currentCard, currentSuit);
+        Sprite drawnSprite = CurrentSprite();
 
         // After a tie or an A/K, a fresh card is dealt so the table visibly changes
         bool dealNewCard = isTie || IsExtremeCard(currentCard);
@@ -141,12 +164,26 @@ public class HighLowGame : MonoBehaviour
             message += $"\n{CardName(nextCard)} drawn. Dealing a new card.";
         }
 
-        yield return FlipTo(revealedCard);
+        // Deal the drawn card next to the current one and turn it over
+        TableCard drawn = SpawnCard();
+        yield return drawn.MoveTo(revealSpot.position);
+        yield return drawn.FlipTo(drawnSprite);
+        yield return new WaitForSeconds(revealPause);
+
+        // The old card flies away and the drawn card takes its place
+        StartCoroutine(Discard(currentCardObject));
+        yield return drawn.MoveTo(cardSpot.position);
+        currentCardObject = drawn;
 
         if (dealNewCard)
         {
             yield return new WaitForSeconds(revealPause);
-            yield return FlipTo(CardArt.GetCard(currentCard, currentSuit));
+
+            StartCoroutine(Discard(currentCardObject));
+            TableCard fresh = SpawnCard();
+            yield return fresh.MoveTo(cardSpot.position);
+            yield return fresh.FlipTo(CurrentSprite());
+            currentCardObject = fresh;
         }
 
         isAnimating = false;
@@ -154,27 +191,44 @@ public class HighLowGame : MonoBehaviour
         run.FinishPlay(chipChange, message);
     }
 
-    // Squash the card to nothing, swap the picture, then stretch it back: it looks like turning over
-    private IEnumerator FlipTo(Sprite sprite)
+    // A new face-down card appears on the deck
+    private TableCard SpawnCard()
     {
-        RectTransform card = cardImage.rectTransform;
-        float halfTime = flipTime / 2f;
+        TableCard card = Instantiate(cardPrefab, deckSpot.position, Quaternion.identity);
+        card.SetSprite(CardArt.GetCardBack());
+        cardsOnTable.Add(card);
+        return card;
+    }
 
-        for (float t = 0f; t < halfTime; t += Time.deltaTime)
+    private IEnumerator Discard(TableCard card)
+    {
+        if (card == null)
         {
-            card.localScale = new Vector3(1f - t / halfTime, 1f, 1f);
-            yield return null;
+            yield break;
         }
 
-        cardImage.sprite = sprite;
+        yield return card.MoveTo(discardSpot.position);
+        cardsOnTable.Remove(card);
+        Destroy(card.gameObject);
+    }
 
-        for (float t = 0f; t < halfTime; t += Time.deltaTime)
+    private void ClearTable()
+    {
+        foreach (TableCard card in cardsOnTable)
         {
-            card.localScale = new Vector3(t / halfTime, 1f, 1f);
-            yield return null;
+            if (card != null)
+            {
+                Destroy(card.gameObject);
+            }
         }
 
-        card.localScale = Vector3.one;
+        cardsOnTable.Clear();
+        currentCardObject = null;
+    }
+
+    private Sprite CurrentSprite()
+    {
+        return CardArt.GetCard(currentCard, currentSuit);
     }
 
     private int CountWinningCards(GuessType guess)
@@ -274,7 +328,7 @@ public class HighLowGame : MonoBehaviour
 
     private void RefreshUI()
     {
-        // During an animation the coroutine controls the card, and the buttons stay locked
+        // While cards are moving, the buttons stay locked
         if (isAnimating)
         {
             higherButton.interactable = false;
@@ -282,8 +336,6 @@ public class HighLowGame : MonoBehaviour
             tieButton.interactable = false;
             return;
         }
-
-        cardImage.sprite = CardArt.GetCard(currentCard, currentSuit);
 
         higherButtonText.text = GuessButtonLabel("HIGHER", GuessType.Higher);
         lowerButtonText.text = GuessButtonLabel("LOWER", GuessType.Lower);
