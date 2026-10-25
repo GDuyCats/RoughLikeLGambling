@@ -15,29 +15,47 @@ public struct AttackOutcome
     public string Message;
 }
 
-// Plays the final boss's attacks. The player parries with right click (press = perfect, hold = block),
-// and the boss can parry the player's reflected bullets and counters back, like a tennis rally.
+// The giant dealer's attacks: hand slams, combos, feints, sweeps and flicked chips.
+// The chibi can run out of the shadow to dodge, or stay and parry with right click
+// (press = perfect, hold = block). The boss can parry reflected chips and counters back.
 public class BossCombat : MonoBehaviour
 {
-    // One hit coming at the player: a bullet (first shot or sent back by the boss) or a melee strike
+    private enum HitKind
+    {
+        Slam,
+        Sweep,
+        Chip
+    }
+
+    // One hit coming at the chibi
     private class IncomingHit
     {
-        public GameObject Bullet;   // null for a melee strike
-        public float LaunchTime;
+        public HitKind Kind;
+        public GameObject Bullet;       // Chips only
+        public Transform Hand;          // Slams and sweeps only
+        public GameObject Shadow;       // Warning marker on the table
+        public float StartTime;         // When the wind-up (or the chip's flight) begins
+        public float LockTime;          // After this the target stops following the chibi
         public float ImpactTime;
+        public float FeintTime = -1f;   // Feints fake a slam at this time
+        public Vector3 Target;          // Where it lands, on the table surface
+        public Vector3 LaunchPoint;     // Chips: where the chip was flicked from
+        public bool Launched;
         public int Damage;
-        public int Rally;           // How many times this hit has already gone back and forth
+        public int Rally;
         public bool Perfected;
         public bool Landed;
         public bool Held;
+        public bool InArea;             // Was the chibi inside the hit area when it landed?
 
-        public bool IsProjectile => Bullet != null;
+        public bool IsProjectile => Kind == HitKind.Chip;
     }
 
-    // One parried bullet flying back to the boss
+    // One parried chip flying back to the boss
     private class OutgoingShot
     {
         public GameObject Bullet;
+        public Vector3 From;
         public float StartTime;
         public float ArriveTime;
         public int Damage;
@@ -46,27 +64,50 @@ public class BossCombat : MonoBehaviour
 
     [Header("Scene")]
     [SerializeField] private Transform bossModel;
-    [SerializeField] private Renderer bossRenderer;
+    [SerializeField] private Renderer bossRenderer;      // The head: flashes before attacks and when hit
+    [SerializeField] private Transform head;
+    [SerializeField] private Transform leftHand;
+    [SerializeField] private Transform rightHand;
     [SerializeField] private Transform player;
-    [SerializeField] private GameObject projectile;          // Template bullet, copied for each shot and kept hidden
+    [SerializeField] private GameObject projectile;      // Template chip, copied for each shot and kept hidden
+    [SerializeField] private GameObject shadowDiscPrefab;
+    [SerializeField] private GameObject shadowLanePrefab;
     [SerializeField] private GameObject parryCue;
     [SerializeField] private RectTransform shrinkingRing;
 
-    [Header("Timing (the boss's own style is in its FinalBoss file)")]
-    [SerializeField] private float bulletFlightTime = 0.6f;
-    [SerializeField] private float firstBulletMinTime = 0.7f;
-    [SerializeField] private float firstBulletMaxTime = 1.0f;
-    [SerializeField] private float meleeLungeTime = 0.2f;
-    [SerializeField, Range(0f, 1f)] private float meleeLungeDistance = 0.6f;
-    [SerializeField, Range(0f, 0.5f)] private float meleeShakeAmount = 0.15f;
-    [SerializeField] private float followUpWindup = 0.25f;   // Wind-up of the quick strike after the boss parries a counter
-    [SerializeField] private Color windupColor = Color.white;
+    [Header("Slams")]
+    [SerializeField] private float hoverHeight = 6f;
+    [SerializeField] private float slamDropTime = 0.15f;
+    [SerializeField] private float shadowLockTime = 0.3f;
+    [SerializeField] private bool allowDodging = false;       // The shadow stops following the chibi this long before the drop
+    [SerializeField] private float slamRadius = 1.6f;
+    [SerializeField] private int minComboHits = 2;
+    [SerializeField] private int maxComboHits = 3;
+    [SerializeField] private float comboMinGap = 0.7f;        // Time between two slams of a combo
+    [SerializeField] private float comboMaxGap = 1.0f;
+    [SerializeField] private float feintExtraTime = 0.5f;     // How much later the real slam comes after a feint
+    [SerializeField] private float followUpWindup = 0.5f;     // Quick slam after the boss parries a counter
+
+    [Header("Sweep")]
+    [SerializeField] private float sweepWindup = 1.1f;
+    [SerializeField] private float sweepTime = 0.3f;
+    [SerializeField] private float sweepLaneHalfWidth = 1.2f;
+    [SerializeField] private float sweepHalfLength = 15f;
+
+    [Header("Chips")]
+    [SerializeField] private float chipFlightTime = 0.6f;
+    [SerializeField] private float firstChipMinTime = 0.7f;
+    [SerializeField] private float firstChipMaxTime = 1.0f;
+    [SerializeField] private float chipHitRadius = 0.9f;
+    [SerializeField, Range(0f, 1.5f)] private float chipAimLead = 0.7f;   // How far ahead chips aim at a running chibi
+    [SerializeField] private float chipArcHeight = 1.5f;
 
     [Header("Parry")]
     [SerializeField] private float perfectWindow = 0.08f;
     [SerializeField] private float whiffLockout = 0.25f;
     [SerializeField] private float ringStartScale = 3f;
     [SerializeField] private bool showTimingCue = true;
+    [SerializeField] private bool showChipShadows = false;   // Shadows under flying chips. Off = read the chips by eye.
 
     [Header("Block")]
     [SerializeField, Range(0f, 1f)] private float projectileBlockReduction = 0.75f;
@@ -77,36 +118,38 @@ public class BossCombat : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float reflectHealPercent = 0.5f;
     [SerializeField, Range(0f, 3f)] private float counterDamageMultiplier = 1.5f;
     [SerializeField] private float reflectFlightTime = 0.3f;
-    [SerializeField] private float knockbackDistance = 0.8f;
-    [SerializeField] private float knockbackTime = 0.25f;
-    [SerializeField] private Color hitFlashColor = Color.yellow;
 
     [Header("Boss Parry (Rally)")]
-    [SerializeField, Range(0f, 1f)] private float rallyChanceDecay = 0.1f;   // The boss's parry chance drops by this on each return
-    [SerializeField, Range(0.3f, 1f)] private float rallySpeedUp = 0.8f;     // Each return takes this times as long, so it gets faster
-    [SerializeField] private float rallyDamageGrowth = 0.15f;                    // Each return adds this share of extra damage, for both sides
+    [SerializeField, Range(0f, 1f)] private float rallyChanceDecay = 0.1f;
+    [SerializeField, Range(0.3f, 1f)] private float rallySpeedUp = 0.8f;
+    [SerializeField] private float rallyDamageGrowth = 0.15f;
     [SerializeField] private int maxRallies = 5;
-    [SerializeField] private Color bossParryColor = Color.cyan;
 
-    private readonly List<GameObject> activeBullets = new List<GameObject>();
+    [Header("Colors")]
+    [SerializeField] private Color windupColor = Color.white;
+    [SerializeField] private Color hitFlashColor = Color.yellow;
+    [SerializeField] private Color bossParryColor = Color.cyan;
+    [SerializeField] private Color shadowColor = new Color(0f, 0f, 0f, 0.5f);
+    [SerializeField] private Color lockedShadowColor = new Color(0.85f, 0.1f, 0.1f, 0.6f);
+
+    private readonly List<GameObject> activeObjects = new List<GameObject>();   // Chips and shadows
     private readonly List<IncomingHit> incoming = new List<IncomingHit>();
     private readonly List<OutgoingShot> outgoing = new List<OutgoingShot>();
 
+    private Rigidbody playerBody;
     private Color bossOriginalColor;
-    private Vector3 bossHome;
-    private Vector3 bossHomeScale;
-    private Vector3 target;
-    private float visualsBusyUntil;
+    private Vector3 leftRestLocal;
+    private Vector3 rightRestLocal;
     private float flashUntil;
     private Color flashColor;
-    private float knockbackStart;
-    private float knockbackEnd;
+    private float visualsBusyUntil;
 
     // Running totals for the current attack
     private AttackOutcome outcome;
     private int perfects;
     private int blocks;
     private int hits;
+    private int dodges;
     private int bossParries;
 
     public bool IsAttacking { get; private set; }
@@ -117,6 +160,10 @@ public class BossCombat : MonoBehaviour
         {
             bossOriginalColor = bossRenderer.material.color;
         }
+
+        playerBody = player.GetComponent<Rigidbody>();
+        leftRestLocal = leftHand.localPosition;
+        rightRestLocal = rightHand.localPosition;
 
         HideVisuals();
     }
@@ -130,16 +177,10 @@ public class BossCombat : MonoBehaviour
     public void CancelAttack()
     {
         StopAllCoroutines();
-        ClearBullets();
+        ClearObjects();
         incoming.Clear();
         outgoing.Clear();
-
-        if (IsAttacking)
-        {
-            bossModel.position = bossHome;
-            bossModel.localScale = bossHomeScale;
-        }
-
+        ResetHands();
         IsAttacking = false;
         ResetBossColor();
         HideVisuals();
@@ -154,28 +195,17 @@ public class BossCombat : MonoBehaviour
         perfects = 0;
         blocks = 0;
         hits = 0;
+        dodges = 0;
         bossParries = 0;
-
-        bossHome = bossModel.position;
-        bossHomeScale = bossModel.localScale;
-        target = player.position;
-        visualsBusyUntil = 0f;
         flashUntil = 0f;
-        knockbackEnd = 0f;
+        visualsBusyUntil = 0f;
 
         float window = perfectWindow + perfectWindowBonus;
         float rewardScale = 1f + rewardBonusPercent / 100f;
         float lockoutUntil = 0f;
-        bool isProjectile = Random.value < boss.ProjectileChance;
 
-        if (isProjectile)
-        {
-            QueueVolley(damage, boss);
-        }
-        else
-        {
-            QueueStrike(damage, Random.Range(boss.MeleeMinWindup, boss.MeleeMaxWindup), 0);
-        }
+        BossAttackType attack = boss.PickAttack();
+        QueueAttack(attack, damage, boss);
 
         // Keep going until nothing is flying and every animation has finished
         while (incoming.Count > 0 || outgoing.Count > 0 || Time.time < visualsBusyUntil)
@@ -183,7 +213,7 @@ public class BossCombat : MonoBehaviour
             float now = Time.time;
 
             // A press counts as a perfect parry for a hit inside the window.
-            // A press with no hit nearby is a whiff and locks parrying for a moment, so mashing doesn't work.
+            // A press with no hit nearby is a whiff and locks parrying for a moment.
             if (canPerfectParry && WasParryPressed() && now >= lockoutUntil)
             {
                 IncomingHit hit = FindHitInWindow(now, window);
@@ -198,18 +228,13 @@ public class BossCombat : MonoBehaviour
                 }
             }
 
-            // ToArray() makes a copy to loop over, because resolving a hit can change the list
             foreach (IncomingHit hit in incoming.ToArray())
             {
+                UpdateTarget(hit, now);
+
                 if (!hit.Landed && now >= hit.ImpactTime)
                 {
-                    hit.Landed = true;
-                    hit.Held = IsParryHeld();
-
-                    if (hit.IsProjectile)
-                    {
-                        hit.Bullet.SetActive(false);
-                    }
+                    Land(hit);
                 }
 
                 // Wait a moment after impact, so a slightly late press can still be perfect
@@ -233,52 +258,210 @@ public class BossCombat : MonoBehaviour
             yield return null;
         }
 
-        bossModel.position = bossHome;
-        bossModel.localScale = bossHomeScale;
+        ResetHands();
         ResetBossColor();
-        ClearBullets();
+        ClearObjects();
         HideVisuals();
 
-        outcome.Message = BuildResultMessage(isProjectile);
+        outcome.Message = BuildResultMessage(attack);
         IsAttacking = false;
         onFinished?.Invoke(outcome);
     }
 
-    private void QueueVolley(int damage, FinalBoss boss)
+    // ---------- Building attacks ----------
+
+    private void QueueAttack(BossAttackType attack, int damage, FinalBoss boss)
     {
-        int count = Random.Range(boss.MinBullets, boss.MaxBullets + 1);
-        float nextImpact = Time.time + Random.Range(firstBulletMinTime, firstBulletMaxTime);
-
-        for (int i = 0; i < count; i++)
+        switch (attack)
         {
-            incoming.Add(new IncomingHit
-            {
-                Bullet = SpawnBullet(),
-                LaunchTime = nextImpact - bulletFlightTime,
-                ImpactTime = nextImpact,
-                Damage = GetDamageShare(damage, count, i)
-            });
-
-            // A random gap before the next bullet, so the rhythm can't be memorized
-            nextImpact += Random.Range(boss.BulletMinGap, boss.BulletMaxGap);
+            case BossAttackType.SlapCombo:
+                QueueCombo(damage, boss);
+                break;
+            case BossAttackType.Feint:
+                QueueSlam(damage, Time.time, RandomWindup(boss), 0, null, true);
+                break;
+            case BossAttackType.Sweep:
+                QueueSweep(damage);
+                break;
+            case BossAttackType.ChipFlick:
+                QueueChips(damage, boss);
+                break;
+            default:
+                QueueSlam(damage, Time.time, RandomWindup(boss), 0, null, false);
+                break;
         }
     }
 
-    private void QueueStrike(int damage, float windup, int rally)
+    // The wind-up must be long enough for the hand to rise and the shadow to lock
+    private float RandomWindup(FinalBoss boss)
     {
+        return Mathf.Max(shadowLockTime + 0.2f, Random.Range(boss.MinWindup, boss.MaxWindup));
+    }
+
+    // Returns when the slam lands, so combos can chain one slam after another
+    private float QueueSlam(int damage, float startTime, float windup, int rally, Transform hand, bool feint)
+    {
+        float impact = startTime + windup + slamDropTime;
+        float feintTime = -1f;
+
+        if (feint)
+        {
+            // Fake the drop when the slam "should" land, then slam for real a bit later
+            feintTime = impact - slamDropTime;
+            impact += feintExtraTime;
+        }
+
         incoming.Add(new IncomingHit
         {
-            Bullet = null,
-            LaunchTime = Time.time,
-            ImpactTime = Time.time + windup + meleeLungeTime,
+            Kind = HitKind.Slam,
+            Hand = hand != null ? hand : ClosestHand(player.position),
+            Shadow = SpawnShadow(shadowDiscPrefab, slamRadius * 2f, slamRadius * 2f),
+            StartTime = startTime,
+            LockTime = impact - slamDropTime - shadowLockTime,
+            ImpactTime = impact,
+            FeintTime = feintTime,
+            Target = FlatPlayerPosition(),
             Damage = damage,
             Rally = rally
         });
+
+        return impact;
     }
 
-    // A hit reached the player: perfect parry sends it back, otherwise block or take the damage
+    // Left and right hands take turns
+    private void QueueCombo(int damage, FinalBoss boss)
+    {
+        int count = Random.Range(minComboHits, maxComboHits + 1);
+        float start = Time.time;
+        float windup = RandomWindup(boss);
+        Transform hand = ClosestHand(player.position);
+
+        for (int i = 0; i < count; i++)
+        {
+            float impact = QueueSlam(GetDamageShare(damage, count, i), start, windup, 0, hand, false);
+
+            start = impact;
+            windup = Random.Range(comboMinGap, comboMaxGap) - slamDropTime;
+            hand = hand == leftHand ? rightHand : leftHand;
+        }
+    }
+
+    // One hand sweeps across a whole lane of the table
+    private void QueueSweep(int damage)
+    {
+        float start = Time.time;
+        float impact = start + sweepWindup + sweepTime * 0.5f;
+
+        incoming.Add(new IncomingHit
+        {
+            Kind = HitKind.Sweep,
+            Hand = leftHand,
+            Shadow = SpawnShadow(shadowLanePrefab, sweepHalfLength * 2f, sweepLaneHalfWidth * 2f),
+            StartTime = start,
+            LockTime = impact - sweepTime * 0.5f - shadowLockTime,
+            ImpactTime = impact,
+            Target = FlatPlayerPosition(),
+            Damage = damage
+        });
+    }
+
+    // A volley of chips with random gaps, each one aimed when it is flicked
+    private void QueueChips(int damage, FinalBoss boss)
+    {
+        int count = Random.Range(boss.MinChips, boss.MaxChips + 1);
+        float nextImpact = Time.time + Random.Range(firstChipMinTime, firstChipMaxTime);
+
+        for (int i = 0; i < count; i++)
+        {
+            float start = nextImpact - chipFlightTime;
+
+            incoming.Add(new IncomingHit
+            {
+                Kind = HitKind.Chip,
+                Bullet = SpawnChip(),
+                Shadow = SpawnShadow(shadowDiscPrefab, chipHitRadius * 2f, chipHitRadius * 2f),
+                StartTime = start,
+                LockTime = start,
+                ImpactTime = nextImpact,
+                Target = FlatPlayerPosition(),
+                Damage = GetDamageShare(damage, count, i)
+            });
+
+            nextImpact += Random.Range(boss.ChipMinGap, boss.ChipMaxGap);
+        }
+    }
+
+    // ---------- Each frame ----------
+
+    private void UpdateTarget(IncomingHit hit, float now)
+    {
+        if (hit.Kind == HitKind.Chip)
+        {
+            // Chips are aimed at the moment they are flicked, ahead of a running chibi
+            if (!hit.Launched && now >= hit.StartTime)
+            {
+                hit.Launched = true;
+                hit.LaunchPoint = rightHand.position + Vector3.up;
+                hit.Target = PredictPlayerPosition(hit.ImpactTime - now);
+            }
+            // Without dodging, chips home in on the chibi all the way
+            else if (hit.Launched && !hit.Landed && !allowDodging)
+            {
+                hit.Target = FlatPlayerPosition();
+            }
+
+            return;
+        }
+
+        // Slams and sweeps follow the chibi until the shadow locks (or until impact, without dodging)
+        if (now < hit.LockTime || (!allowDodging && !hit.Landed))
+        {
+            hit.Target = FlatPlayerPosition();
+        }
+    }
+    private void Land(IncomingHit hit)
+    {
+        hit.Landed = true;
+        hit.Held = IsParryHeld();
+        hit.InArea = !allowDodging || IsPlayerInArea(hit);
+
+        if (hit.IsProjectile)
+        {
+            hit.Bullet.SetActive(false);
+        }
+    }
+
+    private bool IsPlayerInArea(IncomingHit hit)
+    {
+        Vector3 position = FlatPlayerPosition();
+
+        return hit.Kind switch
+        {
+            HitKind.Sweep => Mathf.Abs(position.z - hit.Target.z) <= sweepLaneHalfWidth,
+            HitKind.Slam => Vector3.Distance(position, hit.Target) <= slamRadius,
+            _ => Vector3.Distance(position, hit.Target) <= chipHitRadius
+        };
+    }
+
+    // ---------- Results ----------
+
     private void ResolveIncoming(IncomingHit hit, FinalBoss boss, bool canBlock, float rewardScale)
     {
+        RemoveObject(hit.Shadow);
+
+        // Out of the hit area: dodged. Safe, but no reward.
+        if (!hit.InArea)
+        {
+            dodges++;
+
+            if (hit.IsProjectile)
+            {
+                RemoveObject(hit.Bullet);
+            }
+
+            return;
+        }
+
         int damage = GetRallyDamage(hit.Damage, hit.Rally);
 
         if (hit.Perfected)
@@ -293,6 +476,7 @@ public class BossCombat : MonoBehaviour
                 outgoing.Add(new OutgoingShot
                 {
                     Bullet = hit.Bullet,
+                    From = player.position,
                     StartTime = Time.time,
                     ArriveTime = Time.time + flight,
                     Damage = hit.Damage,
@@ -322,11 +506,11 @@ public class BossCombat : MonoBehaviour
 
         if (hit.IsProjectile)
         {
-            DestroyBullet(hit.Bullet);
+            RemoveObject(hit.Bullet);
         }
     }
 
-    // A reflected bullet reached the boss: the boss may parry it back, faster
+    // A reflected chip reached the boss: the boss may parry it back, faster
     private void ResolveOutgoing(OutgoingShot shot, FinalBoss boss, float rewardScale)
     {
         if (shot.Rally < maxRallies && Random.value < GetBossParryChance(boss, shot.Rally))
@@ -334,13 +518,19 @@ public class BossCombat : MonoBehaviour
             bossParries++;
             Flash(bossParryColor);
 
-            float flight = bulletFlightTime * Mathf.Pow(rallySpeedUp, shot.Rally + 1);
+            float flight = chipFlightTime * Mathf.Pow(rallySpeedUp, shot.Rally + 1);
 
             incoming.Add(new IncomingHit
             {
+                Kind = HitKind.Chip,
                 Bullet = shot.Bullet,
-                LaunchTime = Time.time,
+                Shadow = SpawnShadow(shadowDiscPrefab, chipHitRadius * 2f, chipHitRadius * 2f),
+                StartTime = Time.time,
+                LockTime = Time.time,
                 ImpactTime = Time.time + flight,
+                LaunchPoint = head.position,
+                Launched = true,
+                Target = PredictPlayerPosition(flight),
                 Damage = shot.Damage,
                 Rally = shot.Rally + 1
             });
@@ -353,26 +543,24 @@ public class BossCombat : MonoBehaviour
         outcome.HealAmount += Mathf.RoundToInt(damage * reflectHealPercent * rewardScale);
 
         Flash(hitFlashColor);
-        DestroyBullet(shot.Bullet);
+        RemoveObject(shot.Bullet);
     }
 
-    // The player perfect parried a strike and counters: the boss may parry and strike again quickly
+    // The player perfect parried a slam and counters: the boss may parry and slam again quickly
     private void ResolveCounter(IncomingHit hit, FinalBoss boss, float rewardScale)
     {
         if (hit.Rally < maxRallies && Random.value < GetBossParryChance(boss, hit.Rally))
         {
             bossParries++;
             Flash(bossParryColor);
-            QueueStrike(hit.Damage, followUpWindup, hit.Rally + 1);
+
+            Transform otherHand = hit.Hand == leftHand ? rightHand : leftHand;
+            QueueSlam(hit.Damage, Time.time, followUpWindup, hit.Rally + 1, otherHand, false);
             return;
         }
 
         int damage = GetRallyDamage(hit.Damage, hit.Rally);
         outcome.BossDamage += Mathf.Max(1, Mathf.RoundToInt(damage * counterDamageMultiplier * rewardScale));
-
-        knockbackStart = Time.time;
-        knockbackEnd = Time.time + knockbackTime;
-        visualsBusyUntil = Mathf.Max(visualsBusyUntil, knockbackEnd);
         Flash(hitFlashColor);
     }
 
@@ -381,7 +569,6 @@ public class BossCombat : MonoBehaviour
         return Mathf.Max(0f, boss.ParryChance - rallyChanceDecay * rally);
     }
 
-    // Every return makes the hit hurt more, for whoever ends up taking it
     private int GetRallyDamage(int damage, int rally)
     {
         return Mathf.RoundToInt(damage * (1f + rallyDamageGrowth * rally));
@@ -413,84 +600,179 @@ public class BossCombat : MonoBehaviour
         return best;
     }
 
+    // ---------- Visuals ----------
+
     private void UpdateVisuals(float now)
     {
-        // The boss's body: a melee wind-up, a knockback, or standing still
-        IncomingHit strike = null;
+        UpdateHand(leftHand, leftRestLocal, now);
+        UpdateHand(rightHand, rightRestLocal, now);
+        UpdateHeadColor(now);
 
         foreach (IncomingHit hit in incoming)
         {
-            if (!hit.IsProjectile && !hit.Landed)
+            UpdateShadow(hit, now);
+
+            if (hit.IsProjectile)
             {
-                strike = hit;
-                break;
+                UpdateChip(hit, now);
             }
         }
 
-        if (strike != null)
+        // Reflected chips fly back into the dealer's face
+        foreach (OutgoingShot shot in outgoing)
         {
-            AnimateMelee(strike.ImpactTime, now);
+            float progress = Mathf.Clamp01((now - shot.StartTime) / (shot.ArriveTime - shot.StartTime));
+            shot.Bullet.transform.position = Vector3.Lerp(shot.From, head.position, progress);
         }
-        else if (now < knockbackEnd)
+
+        UpdateRing(now);
+    }
+
+    private void UpdateHand(Transform hand, Vector3 restLocal, float now)
+    {
+        Vector3 rest = hand.parent.TransformPoint(restLocal);
+
+        // The next slam or sweep this hand has to do
+        IncomingHit job = null;
+
+        foreach (IncomingHit hit in incoming)
         {
-            Vector3 away = bossHome - target;
-            away.y = 0f;
-            float t = (now - knockbackStart) / knockbackTime;
-            float push = t < 0.5f ? t * 2f : (1f - t) * 2f;
-            bossModel.position = Vector3.Lerp(bossHome, bossHome + away.normalized * knockbackDistance, push);
-            bossModel.localScale = bossHomeScale;
+            if (hit.Hand == hand && !hit.IsProjectile && (job == null || hit.ImpactTime < job.ImpactTime))
+            {
+                job = hit;
+            }
+        }
+
+        if (job == null || now < job.StartTime)
+        {
+            hand.position = Vector3.Lerp(hand.position, rest, 10f * Time.deltaTime);
+            return;
+        }
+
+        if (job.Kind == HitKind.Sweep)
+        {
+            float sweepStart = job.ImpactTime - sweepTime * 0.5f;
+            Vector3 laneStart = new Vector3(bossModel.position.x - sweepHalfLength, 0.5f, job.Target.z);
+
+            if (now < sweepStart)
+            {
+                // Get into position at the side of the lane, a little raised
+                hand.position = Vector3.Lerp(hand.position, laneStart + Vector3.up * 2f, 8f * Time.deltaTime);
+            }
+            else
+            {
+                float progress = Mathf.Clamp01((now - sweepStart) / sweepTime);
+                hand.position = Vector3.Lerp(laneStart, laneStart + Vector3.right * sweepHalfLength * 2f, progress);
+            }
+
+            return;
+        }
+
+        // Slam: hover above the target, (maybe fake a drop), then smash down
+        float dropStart = job.ImpactTime - slamDropTime;
+        Vector3 hover = job.Target + Vector3.up * hoverHeight;
+
+        if (job.FeintTime > 0f && Mathf.Abs(now - job.FeintTime) < 0.15f)
+        {
+            float dip = 1f - Mathf.Abs(now - job.FeintTime) / 0.15f;
+            hover.y -= hoverHeight * 0.6f * dip;
+        }
+
+        if (now < dropStart)
+        {
+            hand.position = Vector3.Lerp(hand.position, hover, 12f * Time.deltaTime);
         }
         else
         {
-            bossModel.position = bossHome;
-            bossModel.localScale = bossHomeScale;
+            float progress = Mathf.Clamp01((now - dropStart) / slamDropTime);
+            hand.position = Vector3.Lerp(hover, job.Target + Vector3.up * 0.5f, progress);
+        }
+    }
+
+    // The head flickers while a hand is winding up, and flashes on parries and hits
+    private void UpdateHeadColor(float now)
+    {
+        bool windingUp = false;
+
+        foreach (IncomingHit hit in incoming)
+        {
+            if (!hit.IsProjectile && !hit.Landed && now >= hit.StartTime)
+            {
+                windingUp = true;
+                break;
+            }
         }
 
         if (now < flashUntil)
         {
             SetBossColor(flashColor);
         }
-        else if (strike == null)
+        else if (windingUp)
+        {
+            bool flashOn = Mathf.Sin(now * 20f) > 0f;
+            SetBossColor(flashOn ? windupColor : bossOriginalColor);
+        }
+        else
         {
             ResetBossColor();
         }
-
-        // Bullets flying toward the player
-        foreach (IncomingHit hit in incoming)
-        {
-            if (!hit.IsProjectile || hit.Landed)
-            {
-                continue;
-            }
-
-            bool inFlight = now >= hit.LaunchTime;
-            hit.Bullet.SetActive(inFlight);
-
-            if (inFlight)
-            {
-                float progress = Mathf.Clamp01((now - hit.LaunchTime) / (hit.ImpactTime - hit.LaunchTime));
-                hit.Bullet.transform.position = Vector3.Lerp(bossHome, target, progress);
-            }
-        }
-
-        // Reflected bullets flying back to the boss
-        foreach (OutgoingShot shot in outgoing)
-        {
-            float progress = Mathf.Clamp01((now - shot.StartTime) / (shot.ArriveTime - shot.StartTime));
-            shot.Bullet.transform.position = Vector3.Lerp(target, bossHome, progress);
-        }
-
-        UpdateRing(now);
     }
 
-    // The ring shows the timing of the next bullet that hasn't landed
+    // Shadows show where a hit will land, and turn red once locked
+    private void UpdateShadow(IncomingHit hit, float now)
+    {
+        if (hit.Shadow == null)
+        {
+            return;
+        }
+
+        // Chips can have no warning at all, for a harder fight
+        if (hit.IsProjectile && !showChipShadows)
+        {
+            hit.Shadow.SetActive(false);
+            return;
+        }
+
+        bool visible = !hit.Landed && (hit.IsProjectile ? hit.Launched : now >= hit.StartTime);
+        hit.Shadow.SetActive(visible);
+
+        if (!visible)
+        {
+            return;
+        }
+
+        hit.Shadow.transform.position = hit.Kind == HitKind.Sweep
+            ? new Vector3(bossModel.position.x, 0.02f, hit.Target.z)
+            : hit.Target + Vector3.up * 0.02f;
+
+        bool locked = now >= hit.LockTime;
+        hit.Shadow.GetComponent<Renderer>().material.color = locked ? lockedShadowColor : shadowColor;
+    }
+
+    private void UpdateChip(IncomingHit hit, float now)
+    {
+        bool inFlight = hit.Launched && !hit.Landed;
+        hit.Bullet.SetActive(inFlight || outgoing.Exists(shot => shot.Bullet == hit.Bullet));
+
+        if (!inFlight)
+        {
+            return;
+        }
+
+        float progress = Mathf.Clamp01((now - hit.StartTime) / (hit.ImpactTime - hit.StartTime));
+        Vector3 position = Vector3.Lerp(hit.LaunchPoint, hit.Target + Vector3.up, progress);
+        position.y += Mathf.Sin(progress * Mathf.PI) * chipArcHeight;
+        hit.Bullet.transform.position = position;
+    }
+
+    // The ring shows the timing of the next chip that hasn't landed
     private void UpdateRing(float now)
     {
         IncomingHit next = null;
 
         foreach (IncomingHit hit in incoming)
         {
-            if (hit.IsProjectile && !hit.Landed && (next == null || hit.ImpactTime < next.ImpactTime))
+            if (hit.IsProjectile && hit.Launched && !hit.Landed && (next == null || hit.ImpactTime < next.ImpactTime))
             {
                 next = hit;
             }
@@ -500,33 +782,39 @@ public class BossCombat : MonoBehaviour
 
         if (next != null)
         {
-            float progress = Mathf.Clamp01((now - next.LaunchTime) / (next.ImpactTime - next.LaunchTime));
+            float progress = Mathf.Clamp01((now - next.StartTime) / (next.ImpactTime - next.StartTime));
             shrinkingRing.localScale = Vector3.one * Mathf.Lerp(ringStartScale, 1f, progress);
         }
     }
 
-    private void AnimateMelee(float impactTime, float now)
+    // ---------- Helpers ----------
+
+    // The chibi's position on the table surface (arena tables are at height 0)
+    private Vector3 FlatPlayerPosition()
     {
-        float lungeStartTime = impactTime - meleeLungeTime;
+        return new Vector3(player.position.x, 0f, player.position.z);
+    }
 
-        if (now < lungeStartTime)
+    // Where the chibi will be if it keeps running the same way
+    private Vector3 PredictPlayerPosition(float timeAhead)
+    {
+        Vector3 position = FlatPlayerPosition();
+
+        if (playerBody != null)
         {
-            float shake = 1f + meleeShakeAmount * Mathf.Sin(now * 30f);
-            bossModel.localScale = bossHomeScale * shake;
-            bossModel.position = bossHome;
-
-            bool flashOn = Mathf.Sin(now * 20f) > 0f;
-            SetBossColor(flashOn ? windupColor : bossOriginalColor);
+            Vector3 velocity = playerBody.linearVelocity;
+            velocity.y = 0f;
+            position += velocity * timeAhead * chipAimLead;
         }
-        else
-        {
-            bossModel.localScale = bossHomeScale;
-            SetBossColor(windupColor);
 
-            float lungeProgress = Mathf.Clamp01((now - lungeStartTime) / meleeLungeTime);
-            Vector3 lungeEnd = Vector3.Lerp(bossHome, target, meleeLungeDistance);
-            bossModel.position = Vector3.Lerp(bossHome, lungeEnd, lungeProgress);
-        }
+        return position;
+    }
+
+    private Transform ClosestHand(Vector3 position)
+    {
+        float left = Vector3.Distance(leftHand.position, position);
+        float right = Vector3.Distance(rightHand.position, position);
+        return left <= right ? leftHand : rightHand;
     }
 
     private void Flash(Color color)
@@ -536,31 +824,25 @@ public class BossCombat : MonoBehaviour
         visualsBusyUntil = Mathf.Max(visualsBusyUntil, flashUntil);
     }
 
-    private string BuildResultMessage(bool startedAsProjectile)
+    private string BuildResultMessage(BossAttackType attack)
     {
         List<string> parts = new List<string>();
 
-        if (perfects > 0)
-        {
-            parts.Add($"{perfects} perfect");
-        }
+        if (perfects > 0) parts.Add($"{perfects} perfect");
+        if (bossParries > 0) parts.Add($"the boss parried back {bossParries}x");
+        if (blocks > 0) parts.Add($"{blocks} blocked");
+        if (dodges > 0) parts.Add($"{dodges} dodged");
+        if (hits > 0) parts.Add($"{hits} hit");
 
-        if (bossParries > 0)
+        string attackName = attack switch
         {
-            parts.Add($"the boss parried back {bossParries}x");
-        }
+            BossAttackType.SlapCombo => "Slap combo",
+            BossAttackType.Feint => "Feint",
+            BossAttackType.Sweep => "Sweep",
+            BossAttackType.ChipFlick => "Chip flick",
+            _ => "Slam"
+        };
 
-        if (blocks > 0)
-        {
-            parts.Add($"{blocks} blocked");
-        }
-
-        if (hits > 0)
-        {
-            parts.Add($"{hits} hit");
-        }
-
-        string attackName = startedAsProjectile ? "Volley" : "Strike";
         string message = $"{attackName}: {string.Join(", ", parts)}. You take {outcome.DamageTaken} damage";
 
         if (outcome.BossDamage > 0)
@@ -576,31 +858,51 @@ public class BossCombat : MonoBehaviour
         return message + ".";
     }
 
-    private GameObject SpawnBullet()
+    private GameObject SpawnChip()
     {
-        GameObject bullet = Instantiate(projectile);
-        bullet.SetActive(false);
-        activeBullets.Add(bullet);
-        return bullet;
+        GameObject chip = Instantiate(projectile);
+        chip.SetActive(false);
+        activeObjects.Add(chip);
+        return chip;
     }
 
-    private void DestroyBullet(GameObject bullet)
+    private GameObject SpawnShadow(GameObject prefab, float sizeX, float sizeZ)
     {
-        activeBullets.Remove(bullet);
-        Destroy(bullet);
+        GameObject shadow = Instantiate(prefab);
+        shadow.transform.localScale = new Vector3(sizeX, prefab.transform.localScale.y, sizeZ);
+        shadow.SetActive(false);
+        activeObjects.Add(shadow);
+        return shadow;
     }
 
-    private void ClearBullets()
+    private void RemoveObject(GameObject target)
     {
-        foreach (GameObject bullet in activeBullets)
+        if (target == null)
         {
-            if (bullet != null)
+            return;
+        }
+
+        activeObjects.Remove(target);
+        Destroy(target);
+    }
+
+    private void ClearObjects()
+    {
+        foreach (GameObject target in activeObjects)
+        {
+            if (target != null)
             {
-                Destroy(bullet);
+                Destroy(target);
             }
         }
 
-        activeBullets.Clear();
+        activeObjects.Clear();
+    }
+
+    private void ResetHands()
+    {
+        leftHand.localPosition = leftRestLocal;
+        rightHand.localPosition = rightRestLocal;
     }
 
     private void SetBossColor(Color color)

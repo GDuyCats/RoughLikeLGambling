@@ -193,8 +193,8 @@ public class TableManager : MonoBehaviour
             ShowSeatedInfo(table);
         }
 
-        // On a giant table the chibi can walk around (not during the boss fight yet)
-        player.CanMove = table.Arena != null && !run.IsBossFight;
+        // On a giant table the chibi can walk around, even in the boss fight (to dodge)
+        player.CanMove = table.Arena != null;
         isTransitioning = false;
         RefreshButtons();
     }
@@ -302,7 +302,7 @@ public class TableManager : MonoBehaviour
             else if (currentTable == bossTable)
             {
                 // Already at the boss's table: back to the front edge, stand still, face the boss
-                player.CanMove = false;
+                player.CanMove = true;
 
                 if (bossTable.Arena != null)
                 {

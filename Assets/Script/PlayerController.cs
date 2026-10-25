@@ -10,7 +10,8 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float moveSpeed = 6f;
     [SerializeField] private float turnSpeed = 720f;          // Degrees per second when turning to face a direction
     [SerializeField] private float stopDistance = 0.2f;       // How close to a click target counts as "arrived"
-    [SerializeField] private bool moveWithLeftClick = true;   // Right click always works, like TFT
+    [SerializeField] private bool moveWithLeftClick = true;
+    [SerializeField] private bool moveWithRightClick = false;   // Off: right click is reserved for parrying   // Right click always works, like TFT
     [SerializeField] private Camera viewCamera;               // Leave empty to use the main camera
 
     [Header("Walkable Area (X and Z)")]
@@ -150,11 +151,11 @@ public class PlayerController : MonoBehaviour
             return false;
         }
 
-        if (mouse.rightButton.wasPressedThisFrame)
+        if (moveWithRightClick && mouse.rightButton.wasPressedThisFrame)
         {
             return true;
         }
-
+        
         // Ignore left clicks on buttons and other UI
         return moveWithLeftClick && mouse.leftButton.wasPressedThisFrame && !IsPointerOverUI();
     }
@@ -196,7 +197,7 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    
+
     // Used when the chibi moves onto a giant table, and back to the casino floor
     public void SetWalkArea(Vector2 min, Vector2 max)
     {
