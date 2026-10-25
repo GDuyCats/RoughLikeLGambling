@@ -28,7 +28,7 @@ public class BlackjackGame : MonoBehaviour
     [Header("Animation")]
     [SerializeField] private float popTime = 0.15f;    // How long a new card takes to pop in
     [SerializeField] private float flipTime = 0.25f;   // How long the dealer's hidden card takes to turn over
-
+    [SerializeField] private float dealerDrawDelay = 0.6f;
     private int dealerCardsShown;   // How many dealer cards are already on screen
     private int playerCardsShown;
     private bool dealerCardHidden;  // Was the dealer's second card face down last time we drew the table?               // The template card picture
@@ -53,7 +53,7 @@ public class BlackjackGame : MonoBehaviour
 
     private bool isHandInProgress;
     private bool isDoubled;
-
+    private bool isDealerTurn;   // The player is done, the dealer is drawing
     private void Awake()
     {
         dealButtonText = dealButton.GetComponentInChildren<TMP_Text>();
@@ -87,6 +87,7 @@ public class BlackjackGame : MonoBehaviour
         isDoubled = false;
         run.SetMinigameBusy(false);
         run.ShowMessage("Press DEAL to start a hand.");
+        isDealerTurn = false;
     }
 
     private void Deal()
@@ -122,7 +123,7 @@ public class BlackjackGame : MonoBehaviour
 
     private void Hit()
     {
-        if (!isHandInProgress)
+        if (!isHandInProgress || isDealerTurn)
         {
             return;
         }
@@ -147,16 +148,31 @@ public class BlackjackGame : MonoBehaviour
 
     private void Stand()
     {
-        if (!isHandInProgress)
+        if (!isHandInProgress || isDealerTurn)
         {
             return;
         }
 
+        StartCoroutine(DealerTurnRoutine());
+    }
+
+    // The dealer flips the hidden card, then draws one card at a time
+    private IEnumerator DealerTurnRoutine()
+    {
+        isDealerTurn = true;
+        run.ShowMessage("Dealer's turn...");
+        RefreshUI();   // Turns the hidden card over
+
+        yield return new WaitForSeconds(flipTime + dealerDrawDelay);
+
         while (HandValue(dealerHand) < DealerStandValue)
         {
             dealerHand.Add(DrawCard());
+            RefreshUI();   // The new card pops in
+            yield return new WaitForSeconds(dealerDrawDelay);
         }
 
+        isDealerTurn = false;
         FinishHand();
     }
 
@@ -199,7 +215,7 @@ public class BlackjackGame : MonoBehaviour
     // Double and surrender are only allowed on the first two cards
     private bool CanMakeFirstDecision()
     {
-        return isHandInProgress && playerHand.Count == 2 && run.CanPlay;
+        return isHandInProgress && !isDealerTurn && playerHand.Count == 2 && run.CanPlay;
     }
 
     private bool CanDoubleDown()
@@ -467,12 +483,14 @@ public class BlackjackGame : MonoBehaviour
         }
 
         rect.localScale = Vector3.one;
-    }    private void RefreshUI()
+    }
+    private void RefreshUI()
     {
-        // When a hand ends, the dealer's face-down card turns over
-        bool revealDealerCard = dealerCardHidden && !isHandInProgress && dealerHand.Count >= 2;
+        // The dealer's second card stays face down until the dealer's turn (or the end of the hand)
+        bool hideDealerCard = isHandInProgress && !isDealerTurn;
+        bool revealDealerCard = dealerCardHidden && !hideDealerCard && dealerHand.Count >= 2;
 
-        ShowHand(dealerHandArea, dealerHand, isHandInProgress || revealDealerCard, ref dealerCardsShown);
+        ShowHand(dealerHandArea, dealerHand, hideDealerCard || revealDealerCard, ref dealerCardsShown);
         ShowHand(playerHandArea, playerHand, false, ref playerCardsShown);
 
         if (revealDealerCard)
@@ -481,14 +499,14 @@ public class BlackjackGame : MonoBehaviour
             StartCoroutine(FlipCard(hiddenCard, CardArt.GetCard(GetRank(dealerHand[1]), GetSuit(dealerHand[1]))));
         }
 
-        dealerCardHidden = isHandInProgress && dealerHand.Count >= 2;
+        dealerCardHidden = hideDealerCard && dealerHand.Count >= 2;
 
         // The labels now only show the totals
         if (dealerHand.Count == 0)
         {
             dealerText.text = "Dealer";
         }
-        else if (isHandInProgress)
+        else if (hideDealerCard)
         {
             dealerText.text = $"Dealer\n{GetCardValue(GetRank(dealerHand[0]))} + ?";
         }
@@ -507,8 +525,8 @@ public class BlackjackGame : MonoBehaviour
         surrenderButton.gameObject.SetActive(isHandInProgress);
 
         dealButton.interactable = run.CanPlay;
-        hitButton.interactable = run.CanPlay;
-        standButton.interactable = run.CanPlay;
+        hitButton.interactable = run.CanPlay && !isDealerTurn;
+        standButton.interactable = run.CanPlay && !isDealerTurn;
         doubleButton.interactable = CanDoubleDown();
         surrenderButton.interactable = CanMakeFirstDecision();
 
