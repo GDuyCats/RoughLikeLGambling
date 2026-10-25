@@ -1,11 +1,13 @@
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
+using Unity.Cinemachine;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
-// Lets the player walk up to a table, sit down to play, and leave again.
-// In the final round, only the boss's table is open.
+// Lets the player walk up to a table and play. Tables with an arena use a climbing transition
+// onto a giant table top. In the final round, only the boss's table is open.
 public class TableManager : MonoBehaviour
 {
     [SerializeField] private RunManager run;
@@ -14,15 +16,23 @@ public class TableManager : MonoBehaviour
     [SerializeField] private TMP_Text gameTitleText;
     [SerializeField] private Button interactButton;
     [SerializeField] private Button leaveButton;
-    [SerializeField] private GameObject bossModel;            // Placeholder body of the final boss
+    [SerializeField] private GameObject bossModel;
     [SerializeField] private float interactRange = 1.5f;
     [SerializeField] private int switchCostAfterPlaying = 1;
+
+    [Header("Table Transition")]
+    [SerializeField] private ScreenFader fader;
+    [SerializeField] private CinemachineBrain cameraBrain;
+    [SerializeField] private float hopTime = 0.35f;
+    [SerializeField] private float hopHeight = 1.5f;
+    [SerializeField] private float fadeTime = 0.25f;
 
     private TableStation currentTable;
     private TableStation nearbyTable;
     private TMP_Text interactButtonText;
+    private bool isTransitioning;
+    private Vector3 lobbyReturnPosition;   // Where the chibi stood before climbing onto a table
 
-    // The table where the final boss fights (its favorite minigame)
     private TableStation BossTable =>
         run.FinalBoss != null ? tables.Find(table => table.Minigame == run.FinalBoss.FavoriteGame) : null;
 
@@ -57,6 +67,11 @@ public class TableManager : MonoBehaviour
 
     private void Update()
     {
+        if (isTransitioning)
+        {
+            return;
+        }
+
         Keyboard keyboard = Keyboard.current;
 
         if (currentTable != null)
@@ -102,7 +117,6 @@ public class TableManager : MonoBehaviour
         return run.HasPlayedThisRound ? switchCostAfterPlaying : 0;
     }
 
-    // During the boss fight, every table except the boss's is closed
     private bool IsTableClosed(TableStation table)
     {
         return run.IsBossFight && table != BossTable;
@@ -110,7 +124,7 @@ public class TableManager : MonoBehaviour
 
     private bool CanSit()
     {
-        if (nearbyTable == null || !run.CanPlay || IsTableClosed(nearbyTable))
+        if (isTransitioning || nearbyTable == null || !run.CanPlay || IsTableClosed(nearbyTable))
         {
             return false;
         }
@@ -119,10 +133,9 @@ public class TableManager : MonoBehaviour
         return cost == 0 || run.PlaysLeft > cost;
     }
 
-    // No walking away from a hand in progress, or from the final boss
     private bool CanLeave()
     {
-        return currentTable != null && run.CanPlay && !run.IsMinigameBusy && !run.IsBossFight;
+        return !isTransitioning && currentTable != null && run.CanPlay && !run.IsMinigameBusy && !run.IsBossFight;
     }
 
     private void TrySitAtNearbyTable()
@@ -132,26 +145,68 @@ public class TableManager : MonoBehaviour
             return;
         }
 
-        int cost = GetSitCost();
+        StartCoroutine(SitRoutine(nearbyTable, GetSitCost()));
+    }
 
-        currentTable = nearbyTable;
+    private IEnumerator SitRoutine(TableStation table, int cost)
+    {
+        isTransitioning = true;
+        currentTable = table;
         nearbyTable = null;
         player.CanMove = false;
-
-        currentTable.SetOpen(true);
-        gameTitleText.text = currentTable.DisplayName;
+        RefreshButtons();
 
         if (cost > 0)
         {
             run.SpendPlays(cost);
         }
 
+        if (table.Arena != null)
+        {
+            lobbyReturnPosition = player.transform.position;
+
+            // Hop toward the table's edge, then fade to black while the chibi "climbs up"
+            Vector3 edge = table.ClosestPoint(player.transform.position);
+            Vector3 hopTarget = new Vector3(edge.x, player.transform.position.y + 1f, edge.z);
+            yield return player.HopTo(hopTarget, hopHeight, hopTime);
+            yield return fader.FadeOut(fadeTime);
+
+            // While the screen is black, cut the camera instantly instead of blending across the map
+            CinemachineBlendDefinition previousBlend = cameraBrain.DefaultBlend;
+            cameraBrain.DefaultBlend = new CinemachineBlendDefinition(CinemachineBlendDefinition.Styles.Cut, 0f);
+
+            player.SetWalkArea(table.Arena.WalkMin, table.Arena.WalkMax);
+            player.TeleportTo(table.Arena.SpawnPoint.position);
+            table.SetOpen(true);
+
+            // Give the camera a couple of frames to switch, then restore the smooth blend
+            yield return null;
+            yield return null;
+            cameraBrain.DefaultBlend = previousBlend;
+
+            ShowSeatedInfo(table);
+            yield return fader.FadeIn(fadeTime);
+        }
+        else
+        {
+            table.SetOpen(true);
+            ShowSeatedInfo(table);
+        }
+
+        // On a giant table the chibi can walk around (not during the boss fight yet)
+        player.CanMove = table.Arena != null && !run.IsBossFight;
+        isTransitioning = false;
+        RefreshButtons();
+    }
+
+    private void ShowSeatedInfo(TableStation table)
+    {
+        gameTitleText.text = table.DisplayName;
+
         if (run.IsBossFight)
         {
             run.ShowMessage($"{run.FinalBoss.DisplayName} challenges you! Win hands to deal damage.");
         }
-
-        RefreshButtons();
     }
 
     private void LeaveTable()
@@ -161,28 +216,70 @@ public class TableManager : MonoBehaviour
             return;
         }
 
-        StandUp();
-        run.ShowMessage(BuildWalkMessage());
+        StartCoroutine(LeaveRoutine(BuildWalkMessage()));
     }
 
-    private void StandUp()
+    // message can be null to keep the current message
+    private IEnumerator LeaveRoutine(string message)
     {
-        if (currentTable != null)
+        isTransitioning = true;
+        TableStation table = currentTable;
+        player.CanMove = false;
+        RefreshButtons();
+
+        if (table != null && table.Arena != null)
         {
-            currentTable.SetOpen(false);
+            yield return fader.FadeOut(fadeTime);
+
+            CinemachineBlendDefinition previousBlend = cameraBrain.DefaultBlend;
+            cameraBrain.DefaultBlend = new CinemachineBlendDefinition(CinemachineBlendDefinition.Styles.Cut, 0f);
+
+            table.SetOpen(false);
+            player.ResetWalkArea();
+            player.TeleportTo(lobbyReturnPosition);
+
+            yield return null;
+            yield return null;
+            cameraBrain.DefaultBlend = previousBlend;
+
             currentTable = null;
+            gameTitleText.text = "Casino";
+            yield return fader.FadeIn(fadeTime);
+        }
+        else
+        {
+            if (table != null)
+            {
+                table.SetOpen(false);
+            }
+
+            currentTable = null;
+            gameTitleText.text = "Casino";
         }
 
         player.CanMove = true;
-        gameTitleText.text = "Casino";
+
+        if (message != null)
+        {
+            run.ShowMessage(message);
+        }
+
+        isTransitioning = false;
         RefreshButtons();
     }
 
     private void HandleRunStarted()
     {
-        StandUp();
         HideBoss();
-        run.ShowMessage("Walk to a table and press E to play.");
+
+        if (currentTable != null)
+        {
+            StartCoroutine(LeaveRoutine("Walk to a table and press E to play."));
+        }
+        else
+        {
+            run.ShowMessage("Walk to a table and press E to play.");
+        }
     }
 
     private void HandleRoundStarted()
@@ -191,10 +288,20 @@ public class TableManager : MonoBehaviour
         {
             TableStation bossTable = BossTable;
 
-            // Sitting at another table? Stand up and walk to the boss.
+            if (bossTable == null)
+            {
+                Debug.LogError($"No table has Minigame set to {run.FinalBoss.FavoriteGame}. Check the Minigame field on each TableStation.");
+                return;
+            }
+
             if (currentTable != null && currentTable != bossTable)
             {
-                StandUp();
+                StartCoroutine(LeaveRoutine(null));
+            }
+            else if (currentTable == bossTable)
+            {
+                // Already at the boss's table: stand still for the fight
+                player.CanMove = false;
             }
 
             PlaceBoss(bossTable);
@@ -215,8 +322,21 @@ public class TableManager : MonoBehaviour
 
     private void PlaceBoss(TableStation table)
     {
-        if (bossModel == null || table == null || table.BossSpot == null)
+        if (bossModel == null)
         {
+            Debug.LogError("Boss Model is not assigned on TableManager.");
+            return;
+        }
+
+        if (table == null)
+        {
+            Debug.LogError("No boss table found. Check the Minigame field on each TableStation.");
+            return;
+        }
+
+        if (table.BossSpot == null)
+        {
+            Debug.LogError($"{table.name} has no Boss Spot assigned in its TableStation.");
             return;
         }
 
@@ -243,14 +363,15 @@ public class TableManager : MonoBehaviour
 
     private void RefreshButtons()
     {
-        bool showInteract = currentTable == null && nearbyTable != null;
+        bool showInteract = !isTransitioning && currentTable == null && nearbyTable != null;
         interactButton.gameObject.SetActive(showInteract);
 
         if (showInteract)
         {
             if (IsTableClosed(nearbyTable))
             {
-                interactButtonText.text = $"Closed. The boss waits at the {BossTable.DisplayName} table.";
+                string bossTableName = BossTable != null ? BossTable.DisplayName : "boss";
+                interactButtonText.text = $"Closed. The boss waits at the {bossTableName} table.";
             }
             else if (run.IsBossFight)
             {
@@ -267,7 +388,7 @@ public class TableManager : MonoBehaviour
             interactButton.interactable = CanSit();
         }
 
-        leaveButton.gameObject.SetActive(currentTable != null);
+        leaveButton.gameObject.SetActive(currentTable != null && !isTransitioning);
         leaveButton.interactable = CanLeave();
     }
 }

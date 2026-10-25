@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
@@ -17,6 +18,8 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Vector2 areaMax = new Vector2(9.5f, 5.5f);
 
     private Rigidbody body;
+    private Vector2 defaultAreaMin;   // The casino floor's walkable area, to restore after leaving a table
+    private Vector2 defaultAreaMax;
     private Vector2 keyboardInput;
 
     // The "?" means this can also be null: no click target right now
@@ -28,7 +31,8 @@ public class PlayerController : MonoBehaviour
     private void Awake()
     {
         body = GetComponent<Rigidbody>();
-
+        defaultAreaMin = areaMin;
+        defaultAreaMax = areaMax;
         if (viewCamera == null)
         {
             viewCamera = Camera.main;
@@ -60,6 +64,11 @@ public class PlayerController : MonoBehaviour
     // FixedUpdate runs at a steady rate: the best place to move physics objects
     private void FixedUpdate()
     {
+        // While hopping, the hop moves the player instead of physics
+        if (body.isKinematic)
+        {
+            return;
+        }
         // Cancel any spin caused by collisions. Only this script should turn the player.
         body.angularVelocity = Vector3.zero;
 
@@ -185,5 +194,48 @@ public class PlayerController : MonoBehaviour
             body.position = clamped;
             clickTarget = null;
         }
+    }
+
+    
+    // Used when the chibi moves onto a giant table, and back to the casino floor
+    public void SetWalkArea(Vector2 min, Vector2 max)
+    {
+        areaMin = min;
+        areaMax = max;
+    }
+
+    public void ResetWalkArea()
+    {
+        areaMin = defaultAreaMin;
+        areaMax = defaultAreaMax;
+    }
+
+    // Move instantly, for example while the screen is black
+    public void TeleportTo(Vector3 position)
+    {
+        body.position = position;
+        transform.position = position;
+        body.linearVelocity = Vector3.zero;
+        clickTarget = null;
+    }
+
+    // A small jump in an arc. Physics is paused (kinematic) so it doesn't fight the jump.
+    public IEnumerator HopTo(Vector3 target, float height, float duration)
+    {
+        body.isKinematic = true;
+        Vector3 start = transform.position;
+
+        for (float t = 0f; t < duration; t += Time.deltaTime)
+        {
+            float progress = t / duration;
+            Vector3 position = Vector3.Lerp(start, target, progress);
+            position.y += Mathf.Sin(progress * Mathf.PI) * height;
+            transform.position = position;
+            yield return null;
+        }
+
+        transform.position = target;
+        body.isKinematic = false;
+        body.linearVelocity = Vector3.zero;
     }
 }
