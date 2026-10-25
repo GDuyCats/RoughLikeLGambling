@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -22,7 +23,15 @@ public class BlackjackGame : MonoBehaviour
     [SerializeField] private TMP_Text playerText;
     [SerializeField] private RectTransform dealerHandArea;   // Card pictures line up here
     [SerializeField] private RectTransform playerHandArea;
-    [SerializeField] private Image cardPrefab;                // The template card picture
+    [SerializeField] private Image cardPrefab;
+
+    [Header("Animation")]
+    [SerializeField] private float popTime = 0.15f;    // How long a new card takes to pop in
+    [SerializeField] private float flipTime = 0.25f;   // How long the dealer's hidden card takes to turn over
+
+    private int dealerCardsShown;   // How many dealer cards are already on screen
+    private int playerCardsShown;
+    private bool dealerCardHidden;  // Was the dealer's second card face down last time we drew the table?               // The template card picture
     [SerializeField] private Button dealButton;
     [SerializeField] private Button hitButton;
     [SerializeField] private Button standButton;
@@ -88,6 +97,8 @@ public class BlackjackGame : MonoBehaviour
         }
 
         BuildDeck();
+        dealerCardsShown = 0;
+        playerCardsShown = 0;
         playerHand.Clear();
         dealerHand.Clear();
         isDoubled = false;
@@ -390,8 +401,9 @@ public class BlackjackGame : MonoBehaviour
 
         return string.Join("   ", names);
     }
-    // Reuses card pictures already in the area, adds new ones when needed, hides the extras
-    private void ShowHand(RectTransform area, List<int> hand, bool hideSecondCard)
+    // Reuses card pictures already in the area, adds new ones when needed, hides the extras.
+    // Cards that weren't on screen before pop in.
+    private void ShowHand(RectTransform area, List<int> hand, bool hideSecondCard, ref int cardsShown)
     {
         for (int i = 0; i < hand.Count; i++)
         {
@@ -405,18 +417,71 @@ public class BlackjackGame : MonoBehaviour
             cardImage.sprite = faceDown
                 ? CardArt.GetCardBack()
                 : CardArt.GetCard(GetRank(hand[i]), GetSuit(hand[i]));
+
+            if (i >= cardsShown)
+            {
+                StartCoroutine(PopIn(cardImage.rectTransform));
+            }
         }
 
         for (int i = hand.Count; i < area.childCount; i++)
         {
             area.GetChild(i).gameObject.SetActive(false);
         }
+
+        cardsShown = hand.Count;
     }
-    private void RefreshUI()
+
+    // A new card grows from small to full size with a tiny bounce
+    private IEnumerator PopIn(RectTransform card)
     {
-        // Card pictures. The dealer's second card stays face down during a hand.
-        ShowHand(dealerHandArea, dealerHand, isHandInProgress);
-        ShowHand(playerHandArea, playerHand, false);
+        for (float t = 0f; t < popTime; t += Time.deltaTime)
+        {
+            float progress = t / popTime;
+            float scale = Mathf.Lerp(0.3f, 1.1f, progress);
+            card.localScale = Vector3.one * scale;
+            yield return null;
+        }
+
+        card.localScale = Vector3.one;
+    }
+
+    // Squash the card, swap the picture, stretch it back: looks like turning it over
+    private IEnumerator FlipCard(Image card, Sprite faceUp)
+    {
+        RectTransform rect = card.rectTransform;
+        float halfTime = flipTime / 2f;
+
+        for (float t = 0f; t < halfTime; t += Time.deltaTime)
+        {
+            rect.localScale = new Vector3(1f - t / halfTime, 1f, 1f);
+            yield return null;
+        }
+
+        card.sprite = faceUp;
+
+        for (float t = 0f; t < halfTime; t += Time.deltaTime)
+        {
+            rect.localScale = new Vector3(t / halfTime, 1f, 1f);
+            yield return null;
+        }
+
+        rect.localScale = Vector3.one;
+    }    private void RefreshUI()
+    {
+        // When a hand ends, the dealer's face-down card turns over
+        bool revealDealerCard = dealerCardHidden && !isHandInProgress && dealerHand.Count >= 2;
+
+        ShowHand(dealerHandArea, dealerHand, isHandInProgress || revealDealerCard, ref dealerCardsShown);
+        ShowHand(playerHandArea, playerHand, false, ref playerCardsShown);
+
+        if (revealDealerCard)
+        {
+            Image hiddenCard = dealerHandArea.GetChild(1).GetComponent<Image>();
+            StartCoroutine(FlipCard(hiddenCard, CardArt.GetCard(GetRank(dealerHand[1]), GetSuit(dealerHand[1]))));
+        }
+
+        dealerCardHidden = isHandInProgress && dealerHand.Count >= 2;
 
         // The labels now only show the totals
         if (dealerHand.Count == 0)

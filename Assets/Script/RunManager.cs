@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using Unity.Cinemachine;
 // Both System and UnityEngine have a "Random", so we tell C# to use Unity's one
 using Random = UnityEngine.Random;
 
@@ -50,6 +51,7 @@ public class RunManager : MonoBehaviour
     [SerializeField] private int revealBossFromRound = 7;
     [SerializeField] private int playerMaxHealth = 100;   // Base health before the character's bonus
     [SerializeField] private BossCombat bossCombat;
+    [SerializeField] private CinemachineImpulseSource hitShake;   // Shakes the camera when the player gets hit
     [SerializeField] private int overtimeStartPlay = 10;          // Overtime begins on this play of the boss fight
     [SerializeField] private float overtimeRampPerPlay = 0.1f;
 
@@ -62,7 +64,7 @@ public class RunManager : MonoBehaviour
     [SerializeField] private int goalIncreasePerRound = 10;
     [SerializeField] private int upgradeChoices = 3;
     [SerializeField, Range(0f, 1f)] private float stackFalloff = 0.5f;
-
+    [SerializeField] private float chipRollTime = 0.5f;   // Roughly how long the chip counter takes to catch up
     public event Action RunStarted;
     public event Action StateChanged;
     public event Action RoundStarted;
@@ -73,6 +75,7 @@ public class RunManager : MonoBehaviour
 
     private CharacterData character;   // The chibi chosen for this run
     private int chips;
+    private float displayedChips;   // The number shown on screen, rolling toward the real chips
     private int roundNumber;
     private int targetChips;
     private int playsLeft;
@@ -121,12 +124,34 @@ public class RunManager : MonoBehaviour
 
         StartNewRun();
     }
+    // Rolls the chip counter toward the real value, so wins and losses count up or down
+    private void Update()
+    {
+        if (Mathf.Approximately(displayedChips, chips))
+        {
+            return;
+        }
+
+        float speed = Mathf.Max(Mathf.Abs(chips - displayedChips) / chipRollTime, 20f);
+        displayedChips = Mathf.MoveTowards(displayedChips, chips, speed * Time.deltaTime);
+        RefreshChipsText();
+    }
+
+    private void RefreshChipsText()
+    {
+        int shown = Mathf.RoundToInt(displayedChips);
+
+        // Green while counting up, red while counting down, white when settled
+        string color = shown < chips ? "#7BE495" : shown > chips ? "#FF6B6B" : "#FFFFFF";
+        chipsText.text = $"Chips: <color={color}>{shown}</color>   Bet: {GetCurrentBet()} (x{betLevel})";
+    }
 
     // Resets the run, then waits for the player to choose a chibi
     public void StartNewRun()
     {
         character = null;
         chips = startingChips;
+        displayedChips = chips;
         ownedUpgrades.Clear();
         betLevel = 1;
         roundNumber = 0;
@@ -306,7 +331,11 @@ public class RunManager : MonoBehaviour
         playerHealth = Mathf.Clamp(playerHealth - outcome.DamageTaken + outcome.HealAmount, 0, MaxHealth);
         bossHealth = Mathf.Max(0, bossHealth - outcome.BossDamage);
         messageText.text = outcome.Message;
-
+        // Bigger hits shake the screen harder
+        if (outcome.DamageTaken > 0 && hitShake != null)
+        {
+            hitShake.GenerateImpulseWithForce(Mathf.Clamp(outcome.DamageTaken / 10f, 0.3f, 2f));
+        }
         CheckBossFightEnd();
         UpdateUI();
     }
@@ -832,7 +861,7 @@ public class RunManager : MonoBehaviour
             betLevel--;
         }
 
-        chipsText.text = $"Chips: {chips}   Bet: {GetCurrentBet()} (x{betLevel})";
+        RefreshChipsText();
         healthText.text = $"HP: {playerHealth}/{MaxHealth}";
 
         if (IsBossFight)
