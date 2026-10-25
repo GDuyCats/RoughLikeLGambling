@@ -178,7 +178,7 @@ public class TableManager : MonoBehaviour
             player.SetWalkArea(table.Arena.WalkMin, table.Arena.WalkMax);
             player.TeleportTo(table.Arena.SpawnPoint.position);
             table.SetOpen(true);
-
+            table.SetBossView(run.IsBossFight);
             // Give the camera a couple of frames to switch, then restore the smooth blend
             yield return null;
             yield return null;
@@ -235,6 +235,7 @@ public class TableManager : MonoBehaviour
             cameraBrain.DefaultBlend = new CinemachineBlendDefinition(CinemachineBlendDefinition.Styles.Cut, 0f);
 
             table.SetOpen(false);
+            table.SetBossView(false);
             player.ResetWalkArea();
             player.TeleportTo(lobbyReturnPosition);
 
@@ -300,8 +301,15 @@ public class TableManager : MonoBehaviour
             }
             else if (currentTable == bossTable)
             {
-                // Already at the boss's table: stand still for the fight
+                // Already at the boss's table: back to the front edge, stand still, face the boss
                 player.CanMove = false;
+
+                if (bossTable.Arena != null)
+                {
+                    player.TeleportTo(bossTable.Arena.SpawnPoint.position);
+                }
+
+                bossTable.SetBossView(true);
             }
 
             PlaceBoss(bossTable);

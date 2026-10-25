@@ -10,7 +10,7 @@ public class TableStation : MonoBehaviour
     [SerializeField] private GameObject tableCamera;   // For a table with an arena, use the arena camera
     [SerializeField] private Transform bossSpot;
     [SerializeField] private TableArena arena;         // Leave empty for a table played from the casino floor
-
+    [SerializeField] private GameObject bossCamera;    // Low camera that shows the giant dealer during the boss fight
     private Collider tableCollider;
 
     public string DisplayName => displayName;
@@ -40,5 +40,14 @@ public class TableStation : MonoBehaviour
     {
         minigamePanel.SetActive(open);
         tableCamera.SetActive(open);
+    }
+
+    // Switch to the boss fight view (only if this table has a boss camera)
+    public void SetBossView(bool on)
+    {
+        if (bossCamera != null)
+        {
+            bossCamera.SetActive(on);
+        }
     }
 }
