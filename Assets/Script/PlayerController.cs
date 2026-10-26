@@ -3,30 +3,39 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 
-// Moves the player on the casino floor with WASD / arrow keys, or by clicking where to go
+// Moves the chibi with WASD / arrow keys or by left clicking where to go.
+// Also handles hops onto tables, pushes from dice, and getting squashed or dizzy.
 [RequireComponent(typeof(Rigidbody))]
 public class PlayerController : MonoBehaviour
 {
     [SerializeField] private float moveSpeed = 6f;
-    [SerializeField] private float turnSpeed = 720f;          // Degrees per second when turning to face a direction
-    [SerializeField] private float stopDistance = 0.2f;       // How close to a click target counts as "arrived"
+    [SerializeField] private float turnSpeed = 720f;           // Degrees per second when turning to face a direction
+    [SerializeField] private float stopDistance = 0.2f;        // How close to a click target counts as "arrived"
+    [SerializeField] private float knockbackDecay = 12f;       // How fast a push from a die fades
     [SerializeField] private bool moveWithLeftClick = true;
-    [SerializeField] private bool moveWithRightClick = false;   // Off: right click is reserved for parrying   // Right click always works, like TFT
-    [SerializeField] private Camera viewCamera;               // Leave empty to use the main camera
+    [SerializeField] private bool moveWithRightClick = false;  // Off: right click is reserved for parrying
+    [SerializeField] private Camera viewCamera;                // Leave empty to use the main camera
 
     [Header("Walkable Area (X and Z)")]
     [SerializeField] private Vector2 areaMin = new Vector2(-9.5f, -5.5f);
     [SerializeField] private Vector2 areaMax = new Vector2(9.5f, 5.5f);
 
+    [Header("Hit Reactions")]
+    [SerializeField] private Transform squashPivot;            // The visual is squashed around the feet
+    [SerializeField] private float squashAmount = 0.3f;        // Height while squashed (1 = normal)
+    [SerializeField] private float squashTime = 1f;
+    [SerializeField] private float dizzyTime = 0.8f;
+
     private Rigidbody body;
-    private Vector2 defaultAreaMin;   // The casino floor's walkable area, to restore after leaving a table
+    private Vector2 defaultAreaMin;   // The casino floor's walkable area, restored after leaving a table
     private Vector2 defaultAreaMax;
     private Vector2 keyboardInput;
+    private Vector3? clickTarget;     // The "?" means this can be null: no click target right now
+    private Vector3 knockbackVelocity;
+    private bool isStunned;           // Squashed or dizzy: can't walk for a moment
+    private Coroutine reactionRoutine;
 
-    // The "?" means this can also be null: no click target right now
-    private Vector3? clickTarget;
-
-    // Other scripts can switch movement off, for example while sitting at a table
+    // Other scripts can switch movement off, for example during a transition
     public bool CanMove { get; set; } = true;
 
     private void Awake()
@@ -34,6 +43,7 @@ public class PlayerController : MonoBehaviour
         body = GetComponent<Rigidbody>();
         defaultAreaMin = areaMin;
         defaultAreaMax = areaMax;
+
         if (viewCamera == null)
         {
             viewCamera = Camera.main;
@@ -43,7 +53,7 @@ public class PlayerController : MonoBehaviour
     // Update runs every frame: the best place to read input
     private void Update()
     {
-        if (!CanMove)
+        if (!CanMove || isStunned)
         {
             keyboardInput = Vector2.zero;
             clickTarget = null;
@@ -70,6 +80,7 @@ public class PlayerController : MonoBehaviour
         {
             return;
         }
+
         // Cancel any spin caused by collisions. Only this script should turn the player.
         body.angularVelocity = Vector3.zero;
 
@@ -82,7 +93,7 @@ public class PlayerController : MonoBehaviour
         else if (clickTarget.HasValue)
         {
             Vector3 toTarget = clickTarget.Value - body.position;
-            toTarget.y = 0f;   // Only care about distance across the floor
+            toTarget.y = 0f;
 
             if (toTarget.magnitude <= stopDistance)
             {
@@ -94,10 +105,11 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        // Move across the floor but keep the current vertical speed (gravity)
-        Vector3 velocity = direction * moveSpeed;
+        // Walking, plus any push from a die (which fades out quickly)
+        Vector3 velocity = direction * moveSpeed + knockbackVelocity;
         velocity.y = body.linearVelocity.y;
         body.linearVelocity = velocity;
+        knockbackVelocity = Vector3.MoveTowards(knockbackVelocity, Vector3.zero, knockbackDecay * Time.fixedDeltaTime);
 
         if (direction != Vector3.zero)
         {
@@ -155,7 +167,7 @@ public class PlayerController : MonoBehaviour
         {
             return true;
         }
-        
+
         // Ignore left clicks on buttons and other UI
         return moveWithLeftClick && mouse.leftButton.wasPressedThisFrame && !IsPointerOverUI();
     }
@@ -181,7 +193,7 @@ public class PlayerController : MonoBehaviour
         return false;
     }
 
-    // Stop the player from walking off the floor
+    // Stop the player from walking off the floor or the table
     private void KeepInsideArea()
     {
         Vector3 position = body.position;
@@ -197,8 +209,8 @@ public class PlayerController : MonoBehaviour
         }
     }
 
+    // ---------- Tables ----------
 
-    // Used when the chibi moves onto a giant table, and back to the casino floor
     public void SetWalkArea(Vector2 min, Vector2 max)
     {
         areaMin = min;
@@ -217,6 +229,7 @@ public class PlayerController : MonoBehaviour
         body.position = position;
         transform.position = position;
         body.linearVelocity = Vector3.zero;
+        knockbackVelocity = Vector3.zero;
         clickTarget = null;
     }
 
@@ -238,5 +251,89 @@ public class PlayerController : MonoBehaviour
         transform.position = target;
         body.isKinematic = false;
         body.linearVelocity = Vector3.zero;
+    }
+
+    // ---------- Hit reactions ----------
+
+    // Something (like a rolling die) shoves the chibi across the table
+    public void Knockback(Vector3 push)
+    {
+        push.y = 0f;
+        knockbackVelocity += push;
+    }
+
+    // A die landed on the chibi's head: flattened like a pancake, then pops back up and wobbles
+    public void Squash()
+    {
+        StartReaction(SquashRoutine());
+    }
+
+    // A die bumped into the chibi from the side: a short dizzy wobble
+    public void Daze(float duration)
+    {
+        StartReaction(DizzyRoutine(duration));
+    }
+
+    private void StartReaction(IEnumerator routine)
+    {
+        if (squashPivot == null)
+        {
+            return;
+        }
+
+        if (reactionRoutine != null)
+        {
+            StopCoroutine(reactionRoutine);
+        }
+
+        squashPivot.localScale = Vector3.one;
+        squashPivot.localRotation = Quaternion.identity;
+        reactionRoutine = StartCoroutine(routine);
+    }
+
+    private IEnumerator SquashRoutine()
+    {
+        isStunned = true;
+        clickTarget = null;
+
+        // Flatten fast, and get wider like a squashed rubber toy
+        yield return ScaleVisual(new Vector3(1.4f, squashAmount, 1.4f), 0.08f);
+        yield return new WaitForSeconds(squashTime);
+
+        // Pop back up, a little too tall at first, then settle
+        yield return ScaleVisual(new Vector3(0.85f, 1.3f, 0.85f), 0.1f);
+        yield return ScaleVisual(Vector3.one, 0.1f);
+
+        yield return DizzyRoutine(dizzyTime);
+    }
+
+    private IEnumerator DizzyRoutine(float duration)
+    {
+        isStunned = true;
+        clickTarget = null;
+
+        for (float t = 0f; t < duration; t += Time.deltaTime)
+        {
+            // Wobble in a little circle, like stars spinning around the head
+            squashPivot.localRotation = Quaternion.Euler(Mathf.Sin(t * 20f) * 10f, 0f, Mathf.Cos(t * 17f) * 10f);
+            yield return null;
+        }
+
+        squashPivot.localRotation = Quaternion.identity;
+        isStunned = false;
+        reactionRoutine = null;
+    }
+
+    private IEnumerator ScaleVisual(Vector3 target, float duration)
+    {
+        Vector3 start = squashPivot.localScale;
+
+        for (float t = 0f; t < duration; t += Time.deltaTime)
+        {
+            squashPivot.localScale = Vector3.Lerp(start, target, t / duration);
+            yield return null;
+        }
+
+        squashPivot.localScale = target;
     }
 }
