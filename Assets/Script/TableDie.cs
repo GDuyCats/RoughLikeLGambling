@@ -105,6 +105,7 @@ public class TableDie : MonoBehaviour
         player.Daze(0.4f);
     }
 
+    // The rotation that turns the chosen face toward the sky, with a random turn around the vertical axis
     private Quaternion RotationShowing(int value)
     {
         Vector3 faceDirection = faces[value - 1].localPosition.normalized;
