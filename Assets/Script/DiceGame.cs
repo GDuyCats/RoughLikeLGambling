@@ -45,6 +45,8 @@ public class DiceGame : MonoBehaviour
 
     [Header("Dealer Kick")]
     [SerializeField] private float settleTimeout = 4f;                   // Still rolling after this: kick
+    [SerializeField] private float settleHoldTime = 0.8f;                // Dice must stay still this long to count as stopped
+    [SerializeField] private float kickDelay = 1f;                       // The dealer waits and looks again before kicking
     [SerializeField, Range(0.5f, 1f)] private float flatEnough = 0.9f;   // Tilted more than this: kick
     [SerializeField] private float kickStrength = 5f;
     [SerializeField] private int maxKicks = 3;
@@ -132,8 +134,22 @@ public class DiceGame : MonoBehaviour
         yield return WaitForDiceToStop(result => stopped = result);
 
         // A die that won't stop, or lies tilted: the dealer kicks the table
-        for (int i = 0; i < maxKicks && (!stopped || IsTilted(firstDie) || IsTilted(secondDie)); i++)
+        for (int i = 0; i < maxKicks; i++)
         {
+            if (stopped && !IsTilted(firstDie) && !IsTilted(secondDie))
+            {
+                break;
+            }
+
+            // Give the dice one last chance to fall flat by themselves
+            yield return new WaitForSeconds(kickDelay);
+            yield return WaitForDiceToStop(result => stopped = result);
+
+            if (stopped && !IsTilted(firstDie) && !IsTilted(secondDie))
+            {
+                break;
+            }
+
             yield return DealerKick();
             yield return WaitForDiceToStop(result => stopped = result);
         }
@@ -217,7 +233,7 @@ public class DiceGame : MonoBehaviour
                     stillSince = Time.time;
                 }
 
-                if (Time.time - stillSince > 0.2f)
+                if (Time.time - stillSince > settleHoldTime)
                 {
                     report(true);
                     yield break;
@@ -233,7 +249,19 @@ public class DiceGame : MonoBehaviour
 
         report(false);
     }
+    // A die that flew off the table is dropped back onto the middle of it
+    private bool RescueLostDie(TableDie die)
+    {
+        // Still on (or above) the table: nothing to do
+        if (die.transform.position.y > aimSpot.position.y - 2f)
+        {
+            return false;
+        }
 
+        die.Throw(aimSpot.position + Vector3.up * 3f, Vector3.zero, Random.onUnitSphere * throwSpin);
+        run.ShowMessage("The dealer puts a stray die back on the table!");
+        return true;
+    }
     private bool IsTilted(TableDie die)
     {
         die.ReadTopValue(out float flatness);

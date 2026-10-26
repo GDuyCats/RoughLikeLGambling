@@ -41,8 +41,8 @@ public class TableDie : MonoBehaviour
 
         body.linearVelocity = Vector3.zero;
         body.angularVelocity = Vector3.zero;
-        body.AddForce(push, ForceMode.Impulse);
-        body.AddTorque(spin, ForceMode.Impulse);
+        body.AddForce(push, ForceMode.VelocityChange);
+        body.AddTorque(spin, ForceMode.VelocityChange);
     }
 
     // The dealer kicked the table: the die jumps up and tumbles
@@ -50,8 +50,8 @@ public class TableDie : MonoBehaviour
     {
         body.isKinematic = false;
         Vector2 sideways = Random.insideUnitCircle * strength * 0.5f;
-        body.AddForce(new Vector3(sideways.x, strength, sideways.y), ForceMode.Impulse);
-        body.AddTorque(Random.onUnitSphere * strength, ForceMode.Impulse);
+        body.AddForce(new Vector3(sideways.x, strength, sideways.y), ForceMode.VelocityChange);
+        body.AddTorque(Random.onUnitSphere * strength, ForceMode.VelocityChange);
     }
 
     // The value on top, and how flat the die is lying (1 = perfectly flat)
