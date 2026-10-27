@@ -17,7 +17,8 @@ public enum UpgradeType
     BossLifesteal,        // Percent of boss damage dealt that heals the player
     BossShield,           // Number of boss attacks blocked completely
     ParryRewardPercent,   // Extra percent on perfect parry rewards
-    PerfectWindowMs       // Extra milliseconds for the perfect parry window
+    PerfectWindowMs,      // Extra milliseconds for the perfect parry window
+    DoubleAfterSplit      // Blackjack: allows doubling down on hands made by a split
 }
 
 // How rare an upgrade is. Rarer upgrades appear less often.
@@ -44,6 +45,9 @@ public class Upgrade : ScriptableObject
     // If true, only chibis that can perfect parry are offered this upgrade
     [SerializeField] private bool requiresPerfectParry;
 
+    // If true, this upgrade is never offered again once the player owns it
+    [SerializeField] private bool onlyOnce;
+
     public string DisplayName => displayName;
     public string Description => description;
     public UpgradeType Type => type;
@@ -51,4 +55,5 @@ public class Upgrade : ScriptableObject
     public UpgradeRarity Rarity => rarity;
     public bool HasDiminishingStacks => diminishingStacks;
     public bool RequiresPerfectParry => requiresPerfectParry;
+    public bool OnlyOnce => onlyOnce;
 }

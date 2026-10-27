@@ -229,6 +229,7 @@ public class RunManager : MonoBehaviour
         UpdateUI();
     }
 
+    // A play with one result: positive = chips won, negative = chips lost
     public void FinishPlay(int chipChange, string message)
     {
         if (!CanPlay)
@@ -238,7 +239,7 @@ public class RunManager : MonoBehaviour
 
         if (IsBossFight)
         {
-            HandleBossPlay(chipChange, message);
+            HandleBossPlay(Mathf.Max(0, chipChange), Mathf.Max(0, -chipChange), message);
             return;
         }
 
@@ -259,18 +260,66 @@ public class RunManager : MonoBehaviour
         UpdateUI();
     }
 
-    private void HandleBossPlay(int chipChange, string message)
+    // A play that can win and lose at the same time (for example split hands in Blackjack).
+    // In normal rounds only the total counts. In the boss fight, wins hurt the boss first,
+    // then losses make the boss attack.
+    public void FinishMixedPlay(int chipsWon, int chipsLost, string message)
+    {
+        if (!CanPlay)
+        {
+            return;
+        }
+
+        if (IsBossFight)
+        {
+            HandleBossPlay(chipsWon, chipsLost, message);
+            return;
+        }
+
+        FinishPlay(chipsWon - chipsLost, message);
+    }
+
+    private void HandleBossPlay(int chipsWon, int chipsLost, string message)
     {
         playsUsedThisRound++;
+
         // Overtime: the longer the fight, the more damage both sides deal
         float overtime = OvertimeMultiplier;
 
         if (overtime > 1f)
         {
-            chipChange = Mathf.RoundToInt(chipChange * overtime);
+            chipsWon = Mathf.RoundToInt(chipsWon * overtime);
+            chipsLost = Mathf.RoundToInt(chipsLost * overtime);
             message += $"\nOvertime x{overtime:0.0}!";
         }
-        if (chipChange < 0)
+
+        // Wins hurt the boss first
+        if (chipsWon > 0)
+        {
+            bossHealth = Mathf.Max(0, bossHealth - chipsWon);
+            message += $"\nYou hit {finalBoss.DisplayName} for {chipsWon} damage!";
+
+            // Vampire Chips: heal a share of the damage dealt
+            int heal = Mathf.RoundToInt(chipsWon * GetUpgradeTotal(UpgradeType.BossLifesteal) / 100f);
+
+            if (heal > 0)
+            {
+                playerHealth = Mathf.Min(MaxHealth, playerHealth + heal);
+                message += $" You heal {heal} HP.";
+            }
+
+            // The boss is defeated before it can strike back
+            if (bossHealth <= 0)
+            {
+                messageText.text = message;
+                Victory();
+                UpdateUI();
+                return;
+            }
+        }
+
+        // Then losses make the boss attack
+        if (chipsLost > 0)
         {
             // Lucky Charm: a shield cancels the attack completely
             if (shieldsLeft > 0)
@@ -292,30 +341,15 @@ public class RunManager : MonoBehaviour
 
                 isBossAttacking = true;
                 messageText.text = message + $"\n{finalBoss.DisplayName} attacks! {defenseHint}";
-                bossCombat.StartAttack(-chipChange, finalBoss, CanPerfectParry, CanBlock, windowBonus, rewardBonus, FinishBossAttack);
+                bossCombat.StartAttack(chipsLost, finalBoss, CanPerfectParry, CanBlock, windowBonus, rewardBonus, FinishBossAttack);
                 UpdateUI();
                 return;
             }
 
-            int damage = -chipChange;
-            playerHealth = Mathf.Max(0, playerHealth - damage);
-            message += $"\n{finalBoss.DisplayName} hits you for {damage} damage!";
+            playerHealth = Mathf.Max(0, playerHealth - chipsLost);
+            message += $"\n{finalBoss.DisplayName} hits you for {chipsLost} damage!";
         }
-        else if (chipChange > 0)
-        {
-            bossHealth = Mathf.Max(0, bossHealth - chipChange);
-            message += $"\nYou hit {finalBoss.DisplayName} for {chipChange} damage!";
-
-            // Vampire Chips: heal a share of the damage dealt
-            int heal = Mathf.RoundToInt(chipChange * GetUpgradeTotal(UpgradeType.BossLifesteal) / 100f);
-
-            if (heal > 0)
-            {
-                playerHealth = Mathf.Min(MaxHealth, playerHealth + heal);
-                message += $" You heal {heal} HP.";
-            }
-        }
-        else
+        else if (chipsWon == 0)
         {
             message += "\nNo damage this time.";
         }
@@ -324,6 +358,7 @@ public class RunManager : MonoBehaviour
         CheckBossFightEnd();
         UpdateUI();
     }
+
     private void FinishBossAttack(AttackOutcome outcome)
     {
         isBossAttacking = false;
@@ -572,12 +607,15 @@ public class RunManager : MonoBehaviour
 
     private List<Upgrade> PickRandomUpgrades(int count)
     {
-        // Upgrades the chosen chibi can actually use
+        // Upgrades the chosen chibi can actually use (and one-time upgrades not owned yet)
         List<Upgrade> allowed = new List<Upgrade>();
 
         foreach (Upgrade upgrade in upgradePool)
         {
-            if (!upgrade.RequiresPerfectParry || CanPerfectParry)
+            bool usable = !upgrade.RequiresPerfectParry || CanPerfectParry;
+            bool alreadyHave = upgrade.OnlyOnce && CountOwned(upgrade) > 0;
+
+            if (usable && !alreadyHave)
             {
                 allowed.Add(upgrade);
             }
@@ -822,6 +860,12 @@ public class RunManager : MonoBehaviour
         {
             text += $"\nRound interest: {interest}%";
         }
+
+        if (GetUpgradeTotal(UpgradeType.DoubleAfterSplit) > 0)
+        {
+            text += "\nBlackjack: double after split allowed";
+        }
+
         text += BuildCombatStatsText();
 
         if (IsBossFight)
