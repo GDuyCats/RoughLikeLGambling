@@ -56,6 +56,7 @@ public class BlackjackGame : MonoBehaviour
     [SerializeField] private int baseWinBonus = 3;
     [SerializeField] private int maxHands = 4;
     [SerializeField] private int splitBonusPerHand = 2;   // Boss fight: each extra winning (or losing) hand adds this much
+    [SerializeField] private bool allowSurrender = true;  // Untick to remove the surrender option completely
 
     [Header("Animation")]
     [SerializeField] private float dealDelay = 0.2f;         // Time between cards when dealing a new hand
@@ -323,7 +324,7 @@ public class BlackjackGame : MonoBehaviour
             yield break;
         }
 
-        string choices = hands.Count > 1 ? "Hit, stand, double or split?" : "Hit, stand, double, split or surrender?";
+        string choices = CanSurrender() ? "Hit, stand, double, split or surrender?" : "Hit, stand, double or split?";
         run.ShowMessage(HandPrefix() + choices);
         RefreshUI();
     }
@@ -444,7 +445,7 @@ public class BlackjackGame : MonoBehaviour
 
     private bool CanSurrender()
     {
-        return IsOnFirstTwoCards() && hands.Count == 1;
+        return allowSurrender && IsOnFirstTwoCards() && hands.Count == 1;
     }
 
     // ---------- Cards on the table ----------
@@ -843,7 +844,7 @@ public class BlackjackGame : MonoBehaviour
         standButton.gameObject.SetActive(isHandInProgress);
         doubleButton.gameObject.SetActive(isHandInProgress);
         splitButton.gameObject.SetActive(isHandInProgress);
-        surrenderButton.gameObject.SetActive(isHandInProgress);
+        surrenderButton.gameObject.SetActive(isHandInProgress && allowSurrender);
 
         dealButton.interactable = run.CanPlay && !isAnimating;
         hitButton.interactable = CanAct();

@@ -1,10 +1,13 @@
 using System.Collections;
+using System.Collections.Generic;
+using Unity.Cinemachine;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 
 // Moves the chibi with WASD / arrow keys or by left clicking where to go.
 // Left clicking a table button makes the chibi run over and stomp on it.
+// Space jumps; Space again in the air smashes down (presses a button underneath and shoves things nearby).
 // Also handles hops onto tables, pushes from dice, and getting squashed or dizzy.
 [RequireComponent(typeof(Rigidbody))]
 public class PlayerController : MonoBehaviour
@@ -26,6 +29,17 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float pressHopHeight = 1.2f;
     [SerializeField] private float pressHopTime = 0.3f;
 
+    [Header("Jump and Smash")]
+    [SerializeField] private float jumpSpeed = 9f;
+    [SerializeField] private float extraGravity = 15f;         // Added to normal gravity so jumps feel snappy, not floaty
+    [SerializeField] private float groundCheckDistance = 0.15f;
+    [SerializeField] private float smashHangTime = 0.12f;      // The chibi freezes in the air for a moment before smashing
+    [SerializeField] private float smashSpeed = 25f;
+    [SerializeField] private float smashRadius = 3f;           // Loose things inside this circle get shoved
+    [SerializeField] private float smashPushForce = 6f;
+    [SerializeField] private CinemachineImpulseSource smashShake;
+    [SerializeField] private GameObject smashRingPrefab;       // A flat ring that grows and fades on landing (optional)
+
     [Header("Hit Reactions")]
     [SerializeField] private Transform squashPivot;            // The visual is squashed around the feet
     [SerializeField] private float squashAmount = 0.3f;        // Height while squashed (1 = normal)
@@ -43,6 +57,13 @@ public class PlayerController : MonoBehaviour
     private bool isStunned;           // Squashed or dizzy: can't walk for a moment
     private bool isPressing;          // Busy hopping onto a button
     private Coroutine reactionRoutine;
+
+    private bool spacePressed;        // Read in Update, used in FixedUpdate
+    private bool isGrounded;
+    private bool canSmash;            // True after a jump, until landing
+    private float lastJumpTime;
+    private bool isSmashing;
+    private float smashHangUntil;
 
     // Other scripts can switch movement off, for example during a transition
     public bool CanMove { get; set; } = true;
@@ -63,12 +84,17 @@ public class PlayerController : MonoBehaviour
     // Update runs every frame: the best place to read input
     private void Update()
     {
-        if (!CanMove || isStunned || isPressing)
+        if (!CanMove || isStunned || isPressing || isSmashing)
         {
             keyboardInput = Vector2.zero;
             clickTarget = null;
             pressTarget = null;
             return;
+        }
+
+        if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame)
+        {
+            spacePressed = true;
         }
 
         keyboardInput = ReadKeyboard();
@@ -96,6 +122,36 @@ public class PlayerController : MonoBehaviour
 
         // Cancel any spin caused by collisions. Only this script should turn the player.
         body.angularVelocity = Vector3.zero;
+
+        isGrounded = CheckGrounded();
+
+        if (isSmashing)
+        {
+            UpdateSmash();
+            KeepInsideArea();
+            return;
+        }
+
+        // Landing ends the chance to smash (the short delay stops a fresh jump from counting as landed)
+        if (isGrounded && Time.time > lastJumpTime + 0.1f)
+        {
+            canSmash = false;
+        }
+
+        if (spacePressed)
+        {
+            spacePressed = false;
+
+            if (isGrounded)
+            {
+                Jump();
+            }
+            else if (canSmash)
+            {
+                StartSmash();
+                return;
+            }
+        }
 
         Vector3 direction = Vector3.zero;
 
@@ -137,6 +193,12 @@ public class PlayerController : MonoBehaviour
         body.linearVelocity = velocity;
         knockbackVelocity = Vector3.MoveTowards(knockbackVelocity, Vector3.zero, knockbackDecay * Time.fixedDeltaTime);
 
+        // Extra gravity in the air for a snappy jump
+        if (!isGrounded)
+        {
+            body.AddForce(Vector3.down * extraGravity, ForceMode.Acceleration);
+        }
+
         if (direction != Vector3.zero)
         {
             Quaternion targetRotation = Quaternion.LookRotation(direction);
@@ -174,6 +236,139 @@ public class PlayerController : MonoBehaviour
         button.Press();
         isPressing = false;
     }
+
+    // ---------- Jump and smash ----------
+
+    // A sphere just under the chibi's feet: touching anything solid means standing on something
+    private bool CheckGrounded()
+    {
+        const float radius = 0.3f;
+        float distance = halfHeight - radius + groundCheckDistance;
+
+        return Physics.SphereCast(body.position, radius, Vector3.down, out _, distance,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+    }
+
+    private void Jump()
+    {
+        Vector3 velocity = body.linearVelocity;
+        velocity.y = jumpSpeed;
+        body.linearVelocity = velocity;
+
+        isGrounded = false;
+        canSmash = true;
+        lastJumpTime = Time.time;
+    }
+
+    private void StartSmash()
+    {
+        isSmashing = true;
+        canSmash = false;
+        smashHangUntil = Time.time + smashHangTime;
+        clickTarget = null;
+        pressTarget = null;
+        body.linearVelocity = Vector3.zero;
+    }
+
+    // Freeze in the air for a moment, then shoot straight down until something stops the fall
+    private void UpdateSmash()
+    {
+        if (Time.time < smashHangUntil)
+        {
+            body.linearVelocity = Vector3.zero;
+            return;
+        }
+
+        if (isGrounded)
+        {
+            body.linearVelocity = Vector3.zero;
+            isSmashing = false;
+            OnSmashLanded();
+            return;
+        }
+
+        body.linearVelocity = Vector3.down * smashSpeed;
+    }
+
+    private void OnSmashLanded()
+    {
+        Vector3 feet = body.position + Vector3.down * halfHeight;
+
+        // A table button right under the chibi gets pressed
+        if (Physics.Raycast(body.position, Vector3.down, out RaycastHit hit, halfHeight + 0.5f,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        {
+            TableButton button = hit.collider.GetComponentInParent<TableButton>();
+
+            if (button != null)
+            {
+                button.Press();
+            }
+        }
+
+        // Loose things nearby (like dice) get shoved away. Each one only once.
+        HashSet<Rigidbody> shoved = new HashSet<Rigidbody>();
+
+        foreach (Collider nearby in Physics.OverlapSphere(feet, smashRadius))
+        {
+            Rigidbody other = nearby.attachedRigidbody;
+
+            if (other == null || other == body || other.isKinematic || !shoved.Add(other))
+            {
+                continue;
+            }
+
+            other.AddExplosionForce(smashPushForce, feet, smashRadius, 0.5f, ForceMode.VelocityChange);
+        }
+
+        if (smashShake != null)
+        {
+            smashShake.GenerateImpulseWithForce(0.6f);
+        }
+
+        if (smashRingPrefab != null)
+        {
+            StartCoroutine(SmashRingRoutine(feet));
+        }
+
+        // A quick squish on landing, unless the chibi is already squashed or dizzy
+        if (squashPivot != null && reactionRoutine == null)
+        {
+            StartCoroutine(LandingSquishRoutine());
+        }
+    }
+
+    // A flat ring grows out from the landing spot and fades away
+    private IEnumerator SmashRingRoutine(Vector3 feet)
+    {
+        GameObject ring = Instantiate(smashRingPrefab, feet + Vector3.up * 0.05f, Quaternion.identity);
+        Renderer ringRenderer = ring.GetComponent<Renderer>();
+        Color startColor = ringRenderer.material.color;
+        float height = ring.transform.localScale.y;
+        const float duration = 0.35f;
+
+        for (float t = 0f; t < duration; t += Time.deltaTime)
+        {
+            float progress = t / duration;
+            float size = Mathf.Lerp(0.5f, smashRadius * 2f, progress);
+            ring.transform.localScale = new Vector3(size, height, size);
+
+            Color color = startColor;
+            color.a = Mathf.Lerp(startColor.a, 0f, progress);
+            ringRenderer.material.color = color;
+            yield return null;
+        }
+
+        Destroy(ring);
+    }
+
+    private IEnumerator LandingSquishRoutine()
+    {
+        yield return ScaleVisual(new Vector3(1.3f, 0.6f, 1.3f), 0.05f);
+        yield return ScaleVisual(Vector3.one, 0.12f);
+    }
+
+    // ---------- Input helpers ----------
 
     private Vector2 ReadKeyboard()
     {
@@ -238,7 +433,7 @@ public class PlayerController : MonoBehaviour
         button = null;
         Ray ray = viewCamera.ScreenPointToRay(Mouse.current.position.ReadValue());
 
-        // "Collide" lets the ray hit trigger colliders too, which is what the buttons use
+        // "Collide" lets the ray hit trigger colliders too
         if (Physics.Raycast(ray, out RaycastHit hit, 500f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide))
         {
             button = hit.collider.GetComponentInParent<TableButton>();
@@ -299,10 +494,18 @@ public class PlayerController : MonoBehaviour
     {
         body.position = position;
         transform.position = position;
-        body.linearVelocity = Vector3.zero;
+
+        // Physics speed can only be set while physics is on
+        if (!body.isKinematic)
+        {
+            body.linearVelocity = Vector3.zero;
+        }
+
         knockbackVelocity = Vector3.zero;
         clickTarget = null;
         pressTarget = null;
+        isSmashing = false;
+        canSmash = false;
     }
 
     // A small jump in an arc. Physics is paused (kinematic) so it doesn't fight the jump.
@@ -321,6 +524,7 @@ public class PlayerController : MonoBehaviour
         }
 
         transform.position = target;
+        body.position = target;
         body.isKinematic = false;
         body.linearVelocity = Vector3.zero;
     }
