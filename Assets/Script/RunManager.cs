@@ -248,6 +248,15 @@ public class RunManager : MonoBehaviour
         playsUsedThisRound++;
         messageText.text = message;
 
+        if (chipChange > 0)
+        {
+            AudioManager.Play(SoundId.Win);
+        }
+        else if (chipChange < 0)
+        {
+            AudioManager.Play(SoundId.Lose);
+        }
+
         if (chips >= targetChips)
         {
             ClearRound();
@@ -535,6 +544,7 @@ public class RunManager : MonoBehaviour
         }
 
         messageText.text += clearText;
+        AudioManager.Play(SoundId.RoundClear);
         ShowUpgradeChoices();
     }
 
@@ -542,6 +552,7 @@ public class RunManager : MonoBehaviour
     {
         isGameOver = true;
         isVictory = true;
+        AudioManager.Play(SoundId.Victory);
 
         if (finalBoss != null)
         {
@@ -559,6 +570,7 @@ public class RunManager : MonoBehaviour
     private void GameOver()
     {
         isGameOver = true;
+        AudioManager.Play(SoundId.GameOver);
 
         messageText.text += playerHealth <= 0 && finalBoss != null
             ? $"\nYou were knocked out by {finalBoss.DisplayName}!"

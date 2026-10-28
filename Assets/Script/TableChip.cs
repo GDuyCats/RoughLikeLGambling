@@ -12,6 +12,8 @@ public class TableChip : MonoBehaviour
     [SerializeField] private float fallLimit = -3f;         // This far below its starting height, the chip fell off the table
     [SerializeField] private float pickupDelay = 0.6f;      // After a throw, the chip can't be caught again for this long
     [SerializeField] private float maxPickupSpeed = 3f;     // A chip still flying or rolling faster than this can't be picked up
+    [SerializeField] private float minClinkSpeed = 0.8f;    // Slower bumps than this make no sound
+    [SerializeField] private float loudClinkSpeed = 8f;     // Bumps this fast (or faster) play at full volume
 
     private Rigidbody body;
     private Collider chipCollider;
@@ -75,6 +77,7 @@ public class TableChip : MonoBehaviour
         chipCollider.enabled = false;
 
         transform.SetPositionAndRotation(holder.position, holder.rotation);
+        AudioManager.Play(SoundId.ChipPickup);
     }
 
     // Fly off with this speed and direction. The thrower is ignored for a moment so the chip doesn't hit them.
@@ -97,6 +100,7 @@ public class TableChip : MonoBehaviour
 
         body.linearVelocity = velocity;
         body.angularVelocity = Random.onUnitSphere * 5f;
+        AudioManager.Play(SoundId.ChipThrow);
     }
 
     private IEnumerator IgnoreThrowerForAMoment(Collider thrower)
@@ -131,6 +135,14 @@ public class TableChip : MonoBehaviour
     // Unity calls this when the chip bumps into something
     private void OnCollisionEnter(Collision collision)
     {
+        // Clink! Louder when the chip hits harder. Tiny bumps (like a stack settling) make no sound.
+        float impact = collision.relativeVelocity.magnitude;
+
+        if (impact > minClinkSpeed)
+        {
+            AudioManager.Play(SoundId.ChipHit, Mathf.Clamp01(impact / loudClinkSpeed));
+        }
+
         if (!isThrown)
         {
             return;

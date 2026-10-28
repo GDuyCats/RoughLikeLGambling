@@ -9,6 +9,8 @@ public class TableDie : MonoBehaviour
     [SerializeField] private float settledSpeed = 0.05f;             // Below this speed the die counts as stopped
     [SerializeField] private float shoveStrength = 1.2f;             // How hard the die shoves the chibi
     [SerializeField] private float maxShove = 8f;
+    [SerializeField] private float minClackSpeed = 0.8f;     // Slower bumps than this make no sound
+    [SerializeField] private float loudClackSpeed = 8f;      // Bumps this fast (or faster) play at full volume
 
     private Rigidbody body;
 
@@ -81,6 +83,14 @@ public class TableDie : MonoBehaviour
     // Unity calls this when the die bumps into something
     private void OnCollisionEnter(Collision collision)
     {
+        // Clack! Louder when the die hits harder. Tiny bumps while settling make no sound.
+        float impact = collision.relativeVelocity.magnitude;
+
+        if (impact > minClackSpeed)
+        {
+            AudioManager.Play(SoundId.DiceHit, Mathf.Clamp01(impact / loudClackSpeed));
+        }
+
         if (collision.rigidbody == null || !collision.rigidbody.TryGetComponent(out PlayerController player))
         {
             return;

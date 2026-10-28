@@ -44,7 +44,7 @@ public class DiceGame : MonoBehaviour
     [SerializeField] private float throwSpin = 3f;
 
     [Header("Dealer Kick")]
-    [SerializeField] private float settleTimeout = 4f;                   // Still rolling after this: kick
+    [SerializeField] private float settleTimeout = 8f;                   // Still rolling after this: kick
     [SerializeField] private float settleHoldTime = 0.8f;                // Dice must stay still this long to count as stopped
     [SerializeField] private float kickDelay = 1f;                       // The dealer waits and looks again before kicking
     [SerializeField, Range(0.5f, 1f)] private float flatEnough = 0.9f;   // Tilted more than this: kick
@@ -128,6 +128,7 @@ public class DiceGame : MonoBehaviour
 
         ThrowDie(firstDie, -0.6f);
         ThrowDie(secondDie, 0.6f);
+        AudioManager.Play(SoundId.DiceThrow);
 
         yield return new WaitForSeconds(0.5f);
         bool stopped = false;
@@ -205,6 +206,7 @@ public class DiceGame : MonoBehaviour
     private IEnumerator DealerKick()
     {
         run.ShowMessage("The dealer kicks the table!");
+        AudioManager.Play(SoundId.DealerKick);
 
         if (tableShake != null)
         {
@@ -226,6 +228,16 @@ public class DiceGame : MonoBehaviour
 
         while (Time.time < giveUpTime)
         {
+            // A die fell off the table: put it back and start waiting again
+            bool rescuedFirst = RescueLostDie(firstDie);
+            bool rescuedSecond = RescueLostDie(secondDie);
+
+            if (rescuedFirst || rescuedSecond)
+            {
+                stillSince = -1f;
+                giveUpTime = Time.time + settleTimeout;
+            }
+
             if (firstDie.IsSettled && secondDie.IsSettled)
             {
                 if (stillSince < 0f)
@@ -249,6 +261,7 @@ public class DiceGame : MonoBehaviour
 
         report(false);
     }
+
     // A die that flew off the table is dropped back onto the middle of it
     private bool RescueLostDie(TableDie die)
     {
@@ -262,6 +275,7 @@ public class DiceGame : MonoBehaviour
         run.ShowMessage("The dealer puts a stray die back on the table!");
         return true;
     }
+
     private bool IsTilted(TableDie die)
     {
         die.ReadTopValue(out float flatness);

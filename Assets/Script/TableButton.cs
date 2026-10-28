@@ -70,6 +70,7 @@ public class TableButton : MonoBehaviour
 
         StopAllCoroutines();
         StartCoroutine(PressAnimation());
+        AudioManager.Play(SoundId.ButtonPress);
         screenButton.onClick.Invoke();
         return true;
     }

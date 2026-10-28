@@ -24,6 +24,7 @@ public class TableCard : MonoBehaviour
     // Fly in an arc to the target position
     public IEnumerator MoveTo(Vector3 target)
     {
+        AudioManager.Play(SoundId.CardDeal);
         Vector3 start = transform.position;
 
         for (float t = 0f; t < moveTime; t += Time.deltaTime)
@@ -43,6 +44,7 @@ public class TableCard : MonoBehaviour
     // Squash the card, swap the picture, stretch it back: looks like turning it over
     public IEnumerator FlipTo(Sprite sprite)
     {
+        AudioManager.Play(SoundId.CardFlip);
         float halfTime = flipTime / 2f;
 
         for (float t = 0f; t < halfTime; t += Time.deltaTime)

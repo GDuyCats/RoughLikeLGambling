@@ -632,6 +632,11 @@ public class BlackjackGame : MonoBehaviour
                 chipsWon += change;
                 winningHands++;
             }
+
+            if (IsNaturalBlackjack(hands[i]) && change > 0)
+            {
+                AudioManager.Play(SoundId.Blackjack);
+            }
             else if (change < 0)
             {
                 chipsLost -= change;
