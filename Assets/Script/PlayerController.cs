@@ -40,6 +40,11 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private CinemachineImpulseSource smashShake;
     [SerializeField] private GameObject smashRingPrefab;       // A flat ring that grows and fades on landing (optional)
 
+    [Header("Chips")]
+    [SerializeField] private Transform holdPoint;              // Above the head: where a picked-up chip sits
+    [SerializeField] private float pickupRange = 1.8f;
+    [SerializeField] private float throwHorizontalSpeed = 12f; // Roughly how fast a thrown chip travels across the table
+
     [Header("Hit Reactions")]
     [SerializeField] private Transform squashPivot;            // The visual is squashed around the feet
     [SerializeField] private float squashAmount = 0.3f;        // Height while squashed (1 = normal)
@@ -47,6 +52,8 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float dizzyTime = 0.8f;
 
     private Rigidbody body;
+    private Collider ownCollider;
+    private TableChip heldChip;       // The chip on the chibi's head, if any
     private float halfHeight;         // Half the chibi's height, so it lands with its feet on top of things
     private Vector2 defaultAreaMin;   // The casino floor's walkable area, restored after leaving a table
     private Vector2 defaultAreaMax;
@@ -71,7 +78,8 @@ public class PlayerController : MonoBehaviour
     private void Awake()
     {
         body = GetComponent<Rigidbody>();
-        halfHeight = GetComponent<Collider>().bounds.extents.y;
+        ownCollider = GetComponent<Collider>();
+        halfHeight = ownCollider.bounds.extents.y;
         defaultAreaMin = areaMin;
         defaultAreaMax = areaMax;
 
@@ -95,6 +103,19 @@ public class PlayerController : MonoBehaviour
         if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame)
         {
             spacePressed = true;
+        }
+
+        // E: throw the chip you hold, or pick one up
+        if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
+        {
+            if (heldChip != null)
+            {
+                ThrowHeldChip();
+            }
+            else
+            {
+                TryPickUpChip();
+            }
         }
 
         keyboardInput = ReadKeyboard();
@@ -368,6 +389,76 @@ public class PlayerController : MonoBehaviour
         yield return ScaleVisual(Vector3.one, 0.12f);
     }
 
+    // ---------- Chips ----------
+
+    // Pick up the nearest chip in reach. From a stack, the one on top.
+    private void TryPickUpChip()
+    {
+        if (holdPoint == null)
+        {
+            return;
+        }
+
+        TableChip best = null;
+
+        foreach (Collider nearby in Physics.OverlapSphere(body.position, pickupRange))
+        {
+            TableChip chip = nearby.GetComponentInParent<TableChip>();
+
+            if (chip == null || !chip.CanBePickedUp)
+            {
+                continue;
+            }
+
+            if (best == null || chip.transform.position.y > best.transform.position.y)
+            {
+                best = chip;
+            }
+        }
+
+        if (best != null)
+        {
+            best.PickUp(holdPoint);
+            heldChip = best;
+        }
+    }
+
+    // Lob the chip in an arc so it lands where the mouse points
+    private void ThrowHeldChip()
+    {
+        Vector3 start = heldChip.transform.position;
+
+        if (!TryGetMouseWorldPoint(out Vector3 target))
+        {
+            target = body.position + transform.forward * 5f;
+        }
+
+        Vector3 flatDistance = target - start;
+        flatDistance.y = 0f;
+        float flightTime = Mathf.Clamp(flatDistance.magnitude / throwHorizontalSpeed, 0.35f, 1.2f);
+
+        // The speed that reaches the target after flightTime seconds, with gravity pulling it down on the way
+        Vector3 velocity = (target - start) / flightTime - 0.5f * Physics.gravity * flightTime;
+
+        heldChip.Throw(velocity, ownCollider);
+        heldChip = null;
+    }
+
+    // Where the mouse points: the first solid thing under it (like a button), or else the table surface
+    private bool TryGetMouseWorldPoint(out Vector3 point)
+    {
+        Ray ray = viewCamera.ScreenPointToRay(Mouse.current.position.ReadValue());
+
+        if (Physics.Raycast(ray, out RaycastHit hit, 500f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+            && hit.collider != ownCollider)
+        {
+            point = hit.point;
+            return true;
+        }
+
+        return TryGetMouseGroundPoint(out point);
+    }
+
     // ---------- Input helpers ----------
 
     private Vector2 ReadKeyboard()
@@ -506,6 +597,13 @@ public class PlayerController : MonoBehaviour
         pressTarget = null;
         isSmashing = false;
         canSmash = false;
+
+        // Leaving the table: a held chip goes back to where it came from
+        if (heldChip != null)
+        {
+            heldChip.ReturnHome();
+            heldChip = null;
+        }
     }
 
     // A small jump in an arc. Physics is paused (kinematic) so it doesn't fight the jump.
