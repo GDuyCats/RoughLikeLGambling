@@ -157,6 +157,10 @@ public class DiceGame : MonoBehaviour
 
         int first = firstDie.ReadTopValue(out _);
         int second = secondDie.ReadTopValue(out _);
+
+        // The result is in: the dice stay put until the next throw
+        firstDie.Freeze();
+        secondDie.Freeze();
         int total = first + second;
 
         int chipChange;

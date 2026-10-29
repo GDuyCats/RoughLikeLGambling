@@ -102,6 +102,37 @@ public class AudioManager : MonoBehaviour
         }
     }
 
+    // Plays a sound on a given speaker, replacing whatever that speaker was playing.
+    // For sounds that must never overlap and may need stopping early (like the chibi's dizzy sound).
+    public static void PlayOn(AudioSource source, SoundId id, float volumeScale = 1f)
+    {
+        if (Instance != null && source != null)
+        {
+            Instance.PlaySoundOn(source, id, volumeScale);
+        }
+    }
+
+    private void PlaySoundOn(AudioSource source, SoundId id, float volumeScale)
+    {
+        if (!lookup.TryGetValue(id, out SoundSet set) || set.clips == null || set.clips.Length == 0)
+        {
+            return;
+        }
+
+        AudioClip clip = set.clips[Random.Range(0, set.clips.Length)];
+
+        if (clip == null)
+        {
+            return;
+        }
+
+        source.Stop();
+        source.clip = clip;
+        source.volume = set.volume * volumeScale * effectsVolume * masterVolume;
+        source.pitch = 1f + Random.Range(-set.pitchVariation, set.pitchVariation);
+        source.Play();
+    }
+
     private void PlaySound(SoundId id, float volumeScale)
     {
         if (!lookup.TryGetValue(id, out SoundSet set) || set.clips == null || set.clips.Length == 0)

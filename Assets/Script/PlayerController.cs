@@ -50,6 +50,9 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float squashAmount = 0.3f;        // Height while squashed (1 = normal)
     [SerializeField] private float squashTime = 1f;
     [SerializeField] private float dizzyTime = 0.8f;
+    [SerializeField] private float dazeTime = 0.8f;            // How long a bump from the side leaves the chibi dizzy
+    [SerializeField] private float stunImmunityTime = 0.6f;    // After recovering, new bumps can't stun again for this long
+    [SerializeField] private float dizzySoundDelay = 0.25f;    // The dizzy sound starts a moment after the hit, so the hit is heard first
 
     private Rigidbody body;
     private Collider ownCollider;
@@ -64,6 +67,9 @@ public class PlayerController : MonoBehaviour
     private bool isStunned;           // Squashed or dizzy: can't walk for a moment
     private bool isPressing;          // Busy hopping onto a button
     private Coroutine reactionRoutine;
+    private bool isSquashed;          // Flattened right now (a bigger reaction than being dizzy)
+    private float stunImmuneUntil;    // Bumps before this time shove the chibi but don't stun it again
+    private AudioSource voiceSource;  // The chibi's own speaker, so its dizzy sound never overlaps and can be stopped
 
     private bool spacePressed;        // Read in Update, used in FixedUpdate
     private bool isGrounded;
@@ -80,6 +86,10 @@ public class PlayerController : MonoBehaviour
         body = GetComponent<Rigidbody>();
         ownCollider = GetComponent<Collider>();
         halfHeight = ownCollider.bounds.extents.y;
+
+        voiceSource = gameObject.AddComponent<AudioSource>();
+        voiceSource.playOnAwake = false;
+        voiceSource.spatialBlend = 0f;
         defaultAreaMin = areaMin;
         defaultAreaMax = areaMax;
 
@@ -279,6 +289,7 @@ public class PlayerController : MonoBehaviour
         isGrounded = false;
         canSmash = true;
         lastJumpTime = Time.time;
+        AudioManager.Play(SoundId.Jump);
     }
 
     private void StartSmash()
@@ -314,6 +325,7 @@ public class PlayerController : MonoBehaviour
     private void OnSmashLanded()
     {
         Vector3 feet = body.position + Vector3.down * halfHeight;
+        AudioManager.Play(SoundId.Smash);
 
         // A table button right under the chibi gets pressed
         if (Physics.Raycast(body.position, Vector3.down, out RaycastHit hit, halfHeight + 0.5f,
@@ -518,19 +530,33 @@ public class PlayerController : MonoBehaviour
         return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
     }
 
-    // Shoot an invisible ray from the camera through the mouse, and see if it hits a table button
+    // Shoot an invisible ray from the camera through the mouse, and see if it passes through a table button.
+    // The ray looks through everything in the way (like the chibi standing in front of the button),
+    // so a button you can see is a button you can click.
     private bool TryGetClickedButton(out TableButton button)
     {
         button = null;
         Ray ray = viewCamera.ScreenPointToRay(Mouse.current.position.ReadValue());
+        RaycastHit[] hits = Physics.RaycastAll(ray, 500f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide);
+        float closest = float.MaxValue;
 
-        // "Collide" lets the ray hit trigger colliders too
-        if (Physics.Raycast(ray, out RaycastHit hit, 500f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide))
+        foreach (RaycastHit hit in hits)
         {
-            button = hit.collider.GetComponentInParent<TableButton>();
+            if (hit.collider == ownCollider || hit.distance >= closest)
+            {
+                continue;
+            }
+
+            TableButton found = hit.collider.GetComponentInParent<TableButton>();
+
+            if (found != null && found.CanPress)
+            {
+                button = found;
+                closest = hit.distance;
+            }
         }
 
-        return button != null && button.CanPress;
+        return button != null;
     }
 
     // Shoot an invisible ray from the camera through the mouse, and find where it hits the floor
@@ -609,6 +635,7 @@ public class PlayerController : MonoBehaviour
     // A small jump in an arc. Physics is paused (kinematic) so it doesn't fight the jump.
     public IEnumerator HopTo(Vector3 target, float height, float duration)
     {
+        AudioManager.Play(SoundId.TableHop);
         body.isKinematic = true;
         Vector3 start = transform.position;
 
@@ -639,13 +666,27 @@ public class PlayerController : MonoBehaviour
     // A die landed on the chibi's head: flattened like a pancake, then pops back up and wobbles
     public void Squash()
     {
+        // Already flattened, or just recovered: no new reaction
+        if (isSquashed || Time.time < stunImmuneUntil)
+        {
+            return;
+        }
+
+        AudioManager.Play(SoundId.Squash);
         StartReaction(SquashRoutine());
     }
 
-    // A die bumped into the chibi from the side: a short dizzy wobble
-    public void Daze(float duration)
+    // A die bumped into the chibi from the side: a dizzy wobble
+    public void Daze()
     {
-        StartReaction(DizzyRoutine(duration));
+        // Already stunned, or just recovered: the push still happens, but no new stun and no new sound
+        if (isStunned || Time.time < stunImmuneUntil)
+        {
+            return;
+        }
+
+        AudioManager.Play(SoundId.Knockback);
+        StartReaction(DizzyRoutine(dazeTime));
     }
 
     private void StartReaction(IEnumerator routine)
@@ -660,6 +701,8 @@ public class PlayerController : MonoBehaviour
             StopCoroutine(reactionRoutine);
         }
 
+        // A new reaction cuts off the old one's dizzy sound
+        voiceSource.Stop();
         squashPivot.localScale = Vector3.one;
         squashPivot.localRotation = Quaternion.identity;
         reactionRoutine = StartCoroutine(routine);
@@ -668,6 +711,7 @@ public class PlayerController : MonoBehaviour
     private IEnumerator SquashRoutine()
     {
         isStunned = true;
+        isSquashed = true;
         clickTarget = null;
         pressTarget = null;
 
@@ -679,6 +723,7 @@ public class PlayerController : MonoBehaviour
         yield return ScaleVisual(new Vector3(0.85f, 1.3f, 0.85f), 0.1f);
         yield return ScaleVisual(Vector3.one, 0.1f);
 
+        isSquashed = false;
         yield return DizzyRoutine(dizzyTime);
     }
 
@@ -687,16 +732,29 @@ public class PlayerController : MonoBehaviour
         isStunned = true;
         clickTarget = null;
         pressTarget = null;
+        bool soundStarted = false;
 
         for (float t = 0f; t < duration; t += Time.deltaTime)
         {
+            // Hit first, then the dizzy birds. Played on the chibi's own speaker,
+            // so a new dizzy sound replaces the old one instead of piling up.
+            if (!soundStarted && t >= dizzySoundDelay)
+            {
+                soundStarted = true;
+                AudioManager.PlayOn(voiceSource, SoundId.Dizzy);
+            }
+
             // Wobble in a little circle, like stars spinning around the head
             squashPivot.localRotation = Quaternion.Euler(Mathf.Sin(t * 20f) * 10f, 0f, Mathf.Cos(t * 17f) * 10f);
             yield return null;
         }
 
+        // Recovered: the wobble, the stun and the dizzy sound all end together
         squashPivot.localRotation = Quaternion.identity;
+        voiceSource.Stop();
         isStunned = false;
+        isSquashed = false;
+        stunImmuneUntil = Time.time + stunImmunityTime;
         reactionRoutine = null;
     }
 

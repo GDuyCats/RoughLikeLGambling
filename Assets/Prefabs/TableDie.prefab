@@ -111,6 +111,9 @@ MonoBehaviour:
   settledSpeed: 0.05
   shoveStrength: 1.2
   maxShove: 8
+  mass: 40
+  minClackSpeed: 0.8
+  loudClackSpeed: 8
 --- !u!1 &2025139302302429520
 GameObject:
   m_ObjectHideFlags: 0
@@ -742,7 +745,7 @@ SpriteRenderer:
   m_SortingLayer: 0
   m_SortingOrder: 0
   m_MaskInteraction: 0
-  m_Sprite: {fileID: -640247301285870076, guid: 3fa571f9878d90f44883b5bdd3b83601, type: 3}
+  m_Sprite: {fileID: -6894208807899355749, guid: 9b4131bd61b5deb4cb6b9d3b1860a3f9, type: 3}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0

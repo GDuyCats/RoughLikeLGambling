@@ -47,6 +47,7 @@ public class BossCombat : MonoBehaviour
         public bool Landed;
         public bool Held;
         public bool InArea;             // Was the chibi inside the hit area when it landed?
+        public bool WindupPlayed;       // The wind-up sound has played (slams and sweeps)
 
         public bool IsProjectile => Kind == HitKind.Chip;
     }
@@ -221,6 +222,7 @@ public class BossCombat : MonoBehaviour
                 if (hit != null)
                 {
                     hit.Perfected = true;
+                    AudioManager.Play(SoundId.PerfectParry);
                 }
                 else
                 {
@@ -231,6 +233,13 @@ public class BossCombat : MonoBehaviour
             foreach (IncomingHit hit in incoming.ToArray())
             {
                 UpdateTarget(hit, now);
+
+                // A hand starts rising for a slam or a sweep
+                if (!hit.IsProjectile && !hit.WindupPlayed && now >= hit.StartTime)
+                {
+                    hit.WindupPlayed = true;
+                    AudioManager.Play(SoundId.BossWindup);
+                }
 
                 if (!hit.Landed && now >= hit.ImpactTime)
                 {
@@ -403,6 +412,7 @@ public class BossCombat : MonoBehaviour
                 hit.Launched = true;
                 hit.LaunchPoint = rightHand.position + Vector3.up;
                 hit.Target = PredictPlayerPosition(hit.ImpactTime - now);
+                AudioManager.Play(SoundId.BossFlick);
             }
             // Without dodging, chips home in on the chibi all the way
             else if (hit.Launched && !hit.Landed && !allowDodging)
@@ -428,6 +438,14 @@ public class BossCombat : MonoBehaviour
         if (hit.IsProjectile)
         {
             hit.Bullet.SetActive(false);
+        }
+        else if (hit.Kind == HitKind.Sweep)
+        {
+            AudioManager.Play(SoundId.BossSweep);
+        }
+        else
+        {
+            AudioManager.Play(SoundId.BossSlam);
         }
     }
 
@@ -497,11 +515,13 @@ public class BossCombat : MonoBehaviour
         {
             blocks++;
             outcome.DamageTaken += Mathf.CeilToInt(damage * (1f - reduction));
+            AudioManager.Play(SoundId.Block);
         }
         else
         {
             hits++;
             outcome.DamageTaken += damage;
+            AudioManager.Play(SoundId.PlayerHit);
         }
 
         if (hit.IsProjectile)
@@ -517,6 +537,7 @@ public class BossCombat : MonoBehaviour
         {
             bossParries++;
             Flash(bossParryColor);
+            AudioManager.Play(SoundId.BossParry);
 
             float flight = chipFlightTime * Mathf.Pow(rallySpeedUp, shot.Rally + 1);
 
@@ -543,6 +564,7 @@ public class BossCombat : MonoBehaviour
         outcome.HealAmount += Mathf.RoundToInt(damage * reflectHealPercent * rewardScale);
 
         Flash(hitFlashColor);
+        AudioManager.Play(SoundId.BossHurt);
         RemoveObject(shot.Bullet);
     }
 
@@ -553,6 +575,7 @@ public class BossCombat : MonoBehaviour
         {
             bossParries++;
             Flash(bossParryColor);
+            AudioManager.Play(SoundId.BossParry);
 
             Transform otherHand = hit.Hand == leftHand ? rightHand : leftHand;
             QueueSlam(hit.Damage, Time.time, followUpWindup, hit.Rally + 1, otherHand, false);
@@ -562,6 +585,7 @@ public class BossCombat : MonoBehaviour
         int damage = GetRallyDamage(hit.Damage, hit.Rally);
         outcome.BossDamage += Mathf.Max(1, Mathf.RoundToInt(damage * counterDamageMultiplier * rewardScale));
         Flash(hitFlashColor);
+        AudioManager.Play(SoundId.BossHurt);
     }
 
     private float GetBossParryChance(FinalBoss boss, int rally)

@@ -9,6 +9,7 @@ public class TableDie : MonoBehaviour
     [SerializeField] private float settledSpeed = 0.05f;             // Below this speed the die counts as stopped
     [SerializeField] private float shoveStrength = 1.2f;             // How hard the die shoves the chibi
     [SerializeField] private float maxShove = 8f;
+    [SerializeField] private float mass = 40f;               // Heavy, so the chibi can't bulldoze a rolling die (throws and kicks ignore weight)
     [SerializeField] private float minClackSpeed = 0.8f;     // Slower bumps than this make no sound
     [SerializeField] private float loudClackSpeed = 8f;      // Bumps this fast (or faster) play at full volume
 
@@ -21,6 +22,7 @@ public class TableDie : MonoBehaviour
     private void Awake()
     {
         body = GetComponent<Rigidbody>();
+        body.mass = mass;
     }
 
     // Place the die showing a value, frozen in place (no physics)
@@ -56,6 +58,15 @@ public class TableDie : MonoBehaviour
         body.AddTorque(Random.onUnitSphere * strength, ForceMode.VelocityChange);
     }
 
+    // Stop the die where it lies, like a solid block, until the next throw.
+    // The chibi can bump into it or stand on it without changing the result.
+    public void Freeze()
+    {
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        body.isKinematic = true;
+    }
+
     // The value on top, and how flat the die is lying (1 = perfectly flat)
     public int ReadTopValue(out float flatness)
     {
@@ -83,6 +94,12 @@ public class TableDie : MonoBehaviour
     // Unity calls this when the die bumps into something
     private void OnCollisionEnter(Collision collision)
     {
+        // A frozen die is just a block on the table: no sound, no shoving
+        if (body.isKinematic)
+        {
+            return;
+        }
+
         // Clack! Louder when the die hits harder. Tiny bumps while settling make no sound.
         float impact = collision.relativeVelocity.magnitude;
 
@@ -107,12 +124,11 @@ public class TableDie : MonoBehaviour
             return;
         }
 
-        // Hit from the side: shove the chibi away, harder if the die was moving fast
+        // Hit from the side: just a normal bump. The chibi is shoved away (harder if the die was fast), no stun.
         Vector3 away = player.transform.position - transform.position;
         away.y = 0f;
         float strength = Mathf.Min(collision.relativeVelocity.magnitude * shoveStrength, maxShove);
         player.Knockback(away.normalized * strength);
-        player.Daze(0.4f);
     }
 
     // The rotation that turns the chosen face toward the sky, with a random turn around the vertical axis

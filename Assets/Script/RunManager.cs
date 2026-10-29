@@ -307,6 +307,7 @@ public class RunManager : MonoBehaviour
         {
             bossHealth = Mathf.Max(0, bossHealth - chipsWon);
             message += $"\nYou hit {finalBoss.DisplayName} for {chipsWon} damage!";
+            AudioManager.Play(SoundId.BossHurt);
 
             // Vampire Chips: heal a share of the damage dealt
             int heal = Mathf.RoundToInt(chipsWon * GetUpgradeTotal(UpgradeType.BossLifesteal) / 100f);
@@ -335,6 +336,7 @@ public class RunManager : MonoBehaviour
             {
                 shieldsLeft--;
                 messageText.text = message + $"\nYour shield blocks {finalBoss.DisplayName}'s attack!";
+                AudioManager.Play(SoundId.Block);
                 UpdateUI();
                 return;
             }
