@@ -65,6 +65,7 @@ public class RunManager : MonoBehaviour
     [SerializeField] private int upgradeChoices = 3;
     [SerializeField, Range(0f, 1f)] private float stackFalloff = 0.5f;
     [SerializeField] private float chipRollTime = 0.5f;   // Roughly how long the chip counter takes to catch up
+    [SerializeField] private bool startRunOnLoad = false; // Off: the main menu's PLAY button starts the run
     public event Action RunStarted;
     public event Action StateChanged;
     public event Action RoundStarted;
@@ -123,7 +124,10 @@ public class RunManager : MonoBehaviour
         betDownButton.onClick.AddListener(() => ChangeBetLevel(-1));
         betUpButton.onClick.AddListener(() => ChangeBetLevel(1));
 
-        StartNewRun();
+        if (startRunOnLoad)
+        {
+            StartNewRun();
+        }
     }
     // Rolls the chip counter toward the real value, so wins and losses count up or down
     private void Update()
@@ -567,6 +571,7 @@ public class RunManager : MonoBehaviour
             messageText.text += $"\n<color=#FFD54F>YOU WIN! You finished the run with {chips} chips.</color>";
         }
 
+        RecordBook.RecordRunEnd(roundNumber, chips, true);
         restartButton.gameObject.SetActive(true);
     }
 
@@ -579,6 +584,7 @@ public class RunManager : MonoBehaviour
             ? $"\nYou were knocked out by {finalBoss.DisplayName}!"
             : $"\nGame over! You reached round {roundNumber} of {finalRound}.";
 
+        RecordBook.RecordRunEnd(roundNumber, chips, false);
         restartButton.gameObject.SetActive(true);
     }
 
@@ -876,9 +882,9 @@ public class RunManager : MonoBehaviour
             text += $"\nRound interest: {interest}%";
         }
 
-        if (GetUpgradeTotal(UpgradeType.DoubleAfterSplit) > 0)
+        if (GetUpgradeTotal(UpgradeType.BlackjackAfterSplit) > 0)
         {
-            text += "\nBlackjack: double after split allowed";
+            text += "\nBlackjack: 21 after a split pays as blackjack";
         }
 
         text += BuildCombatStatsText();

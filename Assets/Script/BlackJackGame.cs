@@ -80,7 +80,7 @@ public class BlackjackGame : MonoBehaviour
     private int runningAnimations;     // How many card animations are still playing
 
     private PlayerHand ActiveHand => hands.Count > 0 ? hands[Mathf.Min(activeIndex, hands.Count - 1)] : null;
-    private bool HasDoubleAfterSplit => run.GetUpgradeTotal(UpgradeType.DoubleAfterSplit) > 0;
+    private bool HasBlackjackAfterSplit => run.GetUpgradeTotal(UpgradeType.BlackjackAfterSplit) > 0;
 
     private void Awake()
     {
@@ -143,15 +143,19 @@ public class BlackjackGame : MonoBehaviour
         isAnimating = true;
         isHandInProgress = true;
         dealerCardRevealed = false;
-        run.SetMinigameBusy(true);
 
-        // Clear last hand's cards off the table first
-        yield return ClearTableRoutine();
-
-        BuildDeck();
+        // Forget the last hand straight away, so nothing from it (like the split hands' marker)
+        // shows up again while its cards are being cleared off the table
+        List<TableCard> oldCards = AllCardObjects();
         hands.Clear();
         dealerHand.Clear();
+        dealerCards.Clear();
         activeIndex = 0;
+
+        run.SetMinigameBusy(true);
+        yield return DiscardAllRoutine(oldCards);
+
+        BuildDeck();
 
         PlayerHand hand = new PlayerHand();
         hands.Add(hand);
@@ -324,8 +328,7 @@ public class BlackjackGame : MonoBehaviour
             yield break;
         }
 
-        string choices = CanSurrender() ? "Hit, stand, double, split or surrender?" : "Hit, stand, double or split?";
-        run.ShowMessage(HandPrefix() + choices);
+        run.ShowMessage(HandPrefix() + BuildChoicesMessage());
         RefreshUI();
     }
 
@@ -426,21 +429,65 @@ public class BlackjackGame : MonoBehaviour
 
     private bool CanDoubleDown()
     {
-        bool allowedAfterSplit = hands.Count == 1 || HasDoubleAfterSplit;
-        return IsOnFirstTwoCards() && allowedAfterSplit && CanAffordOneMoreBet();
+        // Doubling is allowed on any hand's first two cards, split hands included
+        return IsOnFirstTwoCards() && CanAffordOneMoreBet();
     }
 
     private bool CanSplit()
     {
-        if (!IsOnFirstTwoCards() || hands.Count >= maxHands || !CanAffordOneMoreBet())
+        return IsOnFirstTwoCards() && IsPair(ActiveHand) && hands.Count < maxHands && CanAffordOneMoreBet();
+    }
+
+    // Two cards of the same value (8 and 8, or K and J): the hand could be split
+    private bool IsPair(PlayerHand hand)
+    {
+        if (hand == null || hand.Cards.Count != 2)
         {
             return false;
         }
 
-        int firstRank = GetRank(ActiveHand.Cards[0]);
-        int secondRank = GetRank(ActiveHand.Cards[1]);
+        return GetCardValue(GetRank(hand.Cards[0])) == GetCardValue(GetRank(hand.Cards[1]));
+    }
 
-        return GetCardValue(firstRank) == GetCardValue(secondRank);
+    // Lists only the moves the player can make right now, and says why split or double is locked
+    private string BuildChoicesMessage()
+    {
+        List<string> moves = new List<string> { "Hit", "stand" };
+
+        if (CanDoubleDown())
+        {
+            moves.Add("double");
+        }
+
+        if (CanSplit())
+        {
+            moves.Add("split");
+        }
+
+        if (CanSurrender())
+        {
+            moves.Add("surrender");
+        }
+
+        string lastMove = moves[moves.Count - 1];
+        moves.RemoveAt(moves.Count - 1);
+        string message = $"{string.Join(", ", moves)} or {lastMove}?";
+
+        int chipsNeeded = run.GetCurrentBet() * (TotalBetUnits() + 1);
+        bool onFirstTwoCards = IsOnFirstTwoCards();
+
+        if (onFirstTwoCards && IsPair(ActiveHand) && !CanSplit())
+        {
+            message += hands.Count >= maxHands
+                ? $"\nCan't split: {maxHands} hands is the limit."
+                : $"\nNot enough chips to split (need {chipsNeeded}).";
+        }
+        else if (onFirstTwoCards && !CanAffordOneMoreBet())
+        {
+            message += $"\nNot enough chips to double (need {chipsNeeded}).";
+        }
+
+        return message;
     }
 
     private bool CanSurrender()
@@ -542,18 +589,12 @@ public class BlackjackGame : MonoBehaviour
         runningAnimations--;
     }
 
-    private IEnumerator ClearTableRoutine()
+    // Fly every given card off the table, and wait until they are all gone
+    private IEnumerator DiscardAllRoutine(List<TableCard> cards)
     {
-        foreach (TableCard card in AllCardObjects())
+        foreach (TableCard card in cards)
         {
             StartCoroutine(Track(DiscardRoutine(card)));
-        }
-
-        dealerCards.Clear();
-
-        foreach (PlayerHand hand in hands)
-        {
-            hand.CardObjects.Clear();
         }
 
         yield return new WaitUntil(() => runningAnimations == 0);
@@ -633,7 +674,7 @@ public class BlackjackGame : MonoBehaviour
                 winningHands++;
             }
 
-            if (IsNaturalBlackjack(hands[i]) && change > 0)
+            if (PaysAsBlackjack(hands[i]) && change > 0)
             {
                 AudioManager.Play(SoundId.Blackjack);
             }
@@ -668,7 +709,7 @@ public class BlackjackGame : MonoBehaviour
     {
         int playerValue = HandValue(hand.Cards);
         int dealerValue = HandValue(dealerHand);
-        bool playerBlackjack = IsNaturalBlackjack(hand);
+        bool playerBlackjack = PaysAsBlackjack(hand);
         bool dealerBlackjack = IsDealerBlackjack();
 
         int chipChange;
@@ -816,6 +857,20 @@ public class BlackjackGame : MonoBehaviour
     private bool IsNaturalBlackjack(PlayerHand hand)
     {
         return !hand.IsSplitHand && hand.Cards.Count == 2 && HandValue(hand.Cards) == BlackjackValue;
+    }
+
+    // A natural blackjack, or (with the Blackjack After Split upgrade) two cards making 21 on a split hand
+    private bool PaysAsBlackjack(PlayerHand hand)
+    {
+        if (IsNaturalBlackjack(hand))
+        {
+            return true;
+        }
+
+        return HasBlackjackAfterSplit
+            && hand.IsSplitHand
+            && hand.Cards.Count == 2
+            && HandValue(hand.Cards) == BlackjackValue;
     }
 
     private bool IsDealerBlackjack()

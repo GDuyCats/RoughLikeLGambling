@@ -108,6 +108,7 @@ public class AudioManager : MonoBehaviour
             AudioSource source = gameObject.AddComponent<AudioSource>();
             source.playOnAwake = false;
             source.loop = true;
+            source.ignoreListenerPause = true;   // The music keeps playing while the game is paused
             source.spatialBlend = 0f;
             source.volume = 0f;
             musicSources[i] = source;
@@ -166,6 +167,19 @@ public class AudioManager : MonoBehaviour
         source.clip = clip;
         source.volume = 0f;
         source.Play();
+    }
+
+    // Called by the settings menu. Each value goes from 0 (silent) to 1 (full).
+    public static void SetVolumes(float master, float music, float effects)
+    {
+        if (Instance == null)
+        {
+            return;
+        }
+
+        Instance.masterVolume = Mathf.Clamp01(master);
+        Instance.musicVolume = Mathf.Clamp01(music);
+        Instance.effectsVolume = Mathf.Clamp01(effects);
     }
 
     // volumeScale lets a caller play a sound softer, for example a gentle bump
