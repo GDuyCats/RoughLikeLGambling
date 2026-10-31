@@ -4058,7 +4058,7 @@ MonoBehaviour:
   sounds:
   - id: 0
     clips:
-    - {fileID: 8300000, guid: 5287b9c203278814e9ab8d34775d8dfa, type: 3}
+    - {fileID: 8300000, guid: 5426cfdca7faa1c49847b3affded6e57, type: 3}
     volume: 0.7
     pitchVariation: 0
     minInterval: 0
@@ -4143,6 +4143,90 @@ MonoBehaviour:
   - id: 14
     clips:
     - {fileID: 8300000, guid: 9e085a934751df04a9aa03c5dee1f9fb, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 15
+    clips:
+    - {fileID: 8300000, guid: 54947c6d0fe02b04ca6c033fcac4e2dd, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 20
+    clips:
+    - {fileID: 8300000, guid: ae996353c94db8046923787834fef4d2, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 16
+    clips:
+    - {fileID: 8300000, guid: 275cfb9311eadcb4b92881aabba0215c, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 18
+    clips:
+    - {fileID: 8300000, guid: d1af9bd87c8d2b544b73321435feaf40, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 19
+    clips:
+    - {fileID: 8300000, guid: 9383756e3d81cb140b6cd8a7a2ed6eef, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 21
+    clips:
+    - {fileID: 8300000, guid: 3d217cf662bfdb041938a5bf7281e25e, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 22
+    clips:
+    - {fileID: 8300000, guid: 9284f378d45d4f14db3efcd013082bb4, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 23
+    clips:
+    - {fileID: 8300000, guid: e75cc8ef29fa0fa438d1c4ef83a4f82b, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 24
+    clips:
+    - {fileID: 8300000, guid: 3f73a65f0bc32fb4785540e58404b9bb, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 25
+    clips:
+    - {fileID: 8300000, guid: 55a555b5dfbc46945a6d90fda46b259e, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 26
+    clips:
+    - {fileID: 8300000, guid: 44469a76b1fab8e478da1790fc28d49f, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 27
+    clips:
+    - {fileID: 8300000, guid: 1015d9c8abb5d2d44bf13f4aeb0a52b7, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 28
+    clips:
+    - {fileID: 8300000, guid: 55a555b5dfbc46945a6d90fda46b259e, type: 3}
+    volume: 0.8
+    pitchVariation: 0
+    minInterval: 0
+  - id: 29
+    clips:
+    - {fileID: 8300000, guid: d0956bd8006ef9f45891f822cbeff5cc, type: 3}
     volume: 0.8
     pitchVariation: 0
     minInterval: 0
@@ -10384,7 +10468,7 @@ RectTransform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1268230387}
   m_LocalRotation: {x: 0.53729963, y: -0, z: -0, w: 0.8433915}
-  m_LocalPosition: {x: 0, y: 0, z: -1.6}
+  m_LocalPosition: {x: 0, y: 0, z: -7}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -10392,7 +10476,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 65, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 0.1}
+  m_AnchoredPosition: {x: 0, y: 1}
   m_SizeDelta: {x: 14, y: 1.2}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1268230389
@@ -13947,7 +14031,10 @@ MonoBehaviour:
   squashPivot: {fileID: 1909525414}
   squashAmount: 0.3
   squashTime: 1
-  dizzyTime: 0.8
+  dizzyTime: 1.5
+  dazeTime: 0.8
+  stunImmunityTime: 0.6
+  dizzySoundDelay: 0.25
 --- !u!1 &1581133844
 GameObject:
   m_ObjectHideFlags: 0

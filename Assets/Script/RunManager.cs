@@ -113,6 +113,7 @@ public class RunManager : MonoBehaviour
         ? 1f + overtimeRampPerPlay * (playsUsedThisRound - overtimeStartPlay + 1)
         : 1f;
     public bool IsMinigameBusy { get; private set; }
+    public bool IsGameOver => isGameOver;   // The run has ended (won or lost)
 
     private void Start()
     {

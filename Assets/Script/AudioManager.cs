@@ -60,6 +60,10 @@ public class AudioManager : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float masterVolume = 1f;
     [SerializeField, Range(0f, 1f)] private float effectsVolume = 1f;
 
+    [Header("Music")]
+    [SerializeField, Range(0f, 1f)] private float musicVolume = 0.5f;
+    [SerializeField] private float musicFadeTime = 1.5f;   // Seconds for one song to fade out and the next to fade in
+
     [Header("Sounds")]
     [SerializeField] private int voices = 16;   // How many sounds can play at the same time
     [SerializeField] private List<SoundSet> sounds = new List<SoundSet>();
@@ -68,6 +72,11 @@ public class AudioManager : MonoBehaviour
     private readonly Dictionary<SoundId, float> lastPlayed = new Dictionary<SoundId, float>();
     private AudioSource[] sources;
     private int nextSource;
+
+    // Two music speakers: one fades in the new song while the other fades out the old one
+    private AudioSource[] musicSources;
+    private int activeMusic;
+    private AudioClip currentMusic;
 
     // The one AudioManager in the scene, so any script can reach it
     public static AudioManager Instance { get; private set; }
@@ -91,6 +100,72 @@ public class AudioManager : MonoBehaviour
             source.spatialBlend = 0f;   // Plain stereo sound, not placed in 3D
             sources[i] = source;
         }
+
+        musicSources = new AudioSource[2];
+
+        for (int i = 0; i < musicSources.Length; i++)
+        {
+            AudioSource source = gameObject.AddComponent<AudioSource>();
+            source.playOnAwake = false;
+            source.loop = true;
+            source.spatialBlend = 0f;
+            source.volume = 0f;
+            musicSources[i] = source;
+        }
+    }
+
+    // Fades the music speakers toward their target volume every frame
+    private void Update()
+    {
+        float step = musicFadeTime > 0f ? Time.unscaledDeltaTime / musicFadeTime : 1f;
+        float fullVolume = musicVolume * masterVolume;
+
+        for (int i = 0; i < musicSources.Length; i++)
+        {
+            AudioSource source = musicSources[i];
+            bool isActive = i == activeMusic && currentMusic != null;
+            float target = isActive ? fullVolume : 0f;
+
+            source.volume = Mathf.MoveTowards(source.volume, target, step * Mathf.Max(fullVolume, 0.01f));
+
+            // A song that has fully faded out stops playing
+            if (!isActive && source.isPlaying && source.volume <= 0f)
+            {
+                source.Stop();
+            }
+        }
+    }
+
+    // Switch to another song with a smooth crossfade. null fades the music out.
+    // Asking for the song that is already playing does nothing, so this can be called every frame.
+    public static void PlayMusic(AudioClip clip)
+    {
+        if (Instance != null)
+        {
+            Instance.SwitchMusic(clip);
+        }
+    }
+
+    private void SwitchMusic(AudioClip clip)
+    {
+        if (clip == currentMusic)
+        {
+            return;
+        }
+
+        currentMusic = clip;
+
+        if (clip == null)
+        {
+            return;
+        }
+
+        // The other speaker starts the new song from silence, while the current one fades out
+        activeMusic = 1 - activeMusic;
+        AudioSource source = musicSources[activeMusic];
+        source.clip = clip;
+        source.volume = 0f;
+        source.Play();
     }
 
     // volumeScale lets a caller play a sound softer, for example a gentle bump
