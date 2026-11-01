@@ -28,6 +28,7 @@ public class TableDealer : MonoBehaviour
     [SerializeField] private Color calmEyeColor = new Color(0.9f, 0.9f, 1f);
     [SerializeField] private Color bossEyeColor = new Color(1f, 0.1f, 0.05f);
     [SerializeField] private float eyeGlow = 3f;
+    [SerializeField] private float rageEyeGlow = 2.5f;     // Eyes glow this many times brighter when the boss is furious
 
     [Header("Chip Hits")]
     [SerializeField] private float grumbleCooldown = 2f;   // At most one grumble this often
@@ -59,6 +60,7 @@ public class TableDealer : MonoBehaviour
     private Coroutine speechRoutine;
 
     private bool isMarked;          // This dealer is the run's revealed boss
+    private bool isEnraged;         // The boss is below half health: its eyes blaze
     private int annoyance;
     private float nextCalmTime;
     private bool isSlapping;
@@ -121,6 +123,18 @@ public class TableDealer : MonoBehaviour
         SetEyeColor(marked ? bossEyeColor : calmEyeColor);
     }
 
+    // The boss is furious (low health): blazing eyes, and it shouts its line once
+    public void SetEnraged(bool enraged, string line)
+    {
+        isEnraged = enraged;
+        SetEyeColor(isMarked || enraged ? bossEyeColor : calmEyeColor);
+
+        if (enraged && !string.IsNullOrEmpty(line))
+        {
+            Say(line);
+        }
+    }
+
     // A thrown chip hit this dealer on the head
     public void OnChipHit()
     {
@@ -133,27 +147,9 @@ public class TableDealer : MonoBehaviour
 
         flinchRoutine = StartCoroutine(FlinchRoutine());
 
-        // In the boss fight the boss is already fighting for real, and a slap already on its way counts once
-        bool canGetAngry = run != null && !run.IsBossFight && !isSlapping;
-
-        if (canGetAngry)
+        if (GetAngrier())
         {
-            annoyance++;
-            nextCalmTime = Time.time + forgiveTime;
-
-            if (annoyance >= slapAt)
-            {
-                Say(Pick(SlapLines()));
-                StartCoroutine(SlapRoutine());
-                return;
-            }
-
-            if (annoyance >= warnAt)
-            {
-                Say(Pick(WarningLines()));
-                StartCoroutine(EyeFlashRoutine());
-                return;
-            }
+            return;
         }
 
         if (grumbles.Length > 0 && Time.time >= nextGrumbleTime)
@@ -161,6 +157,50 @@ public class TableDealer : MonoBehaviour
             nextGrumbleTime = Time.time + grumbleCooldown;
             Say(Pick(grumbles));
         }
+    }
+
+    // The chibi took a chip from this dealer's tray: that counts as a poke too
+    public void OnChipStolen()
+    {
+        if (GetAngrier())
+        {
+            return;
+        }
+
+        if (Time.time >= nextGrumbleTime)
+        {
+            nextGrumbleTime = Time.time + grumbleCooldown;
+            Say(Pick(TheftLines()));
+        }
+    }
+
+    // One step angrier: a warning, then the slap. Returns true if the dealer already said something.
+    // In the boss fight the boss is already fighting for real, and a slap already on its way counts once.
+    private bool GetAngrier()
+    {
+        if (run == null || run.IsBossFight || isSlapping)
+        {
+            return false;
+        }
+
+        annoyance++;
+        nextCalmTime = Time.time + forgiveTime;
+
+        if (annoyance >= slapAt)
+        {
+            Say(Pick(SlapLines()));
+            StartCoroutine(SlapRoutine());
+            return true;
+        }
+
+        if (annoyance >= warnAt)
+        {
+            Say(Pick(WarningLines()));
+            StartCoroutine(EyeFlashRoutine());
+            return true;
+        }
+
+        return false;
     }
 
     // ---------- The playful slap ----------
@@ -336,6 +376,16 @@ public class TableDealer : MonoBehaviour
 
     // ---------- Lines ----------
 
+    private string[] TheftLines()
+    {
+        return GameOf() switch
+        {
+            MinigameType.HighLow => new[] { "I saw your hand move before it did.", "Those chips are fated to stay with me." },
+            MinigameType.Dice => new[] { "Thief! That is the royal treasury!", "Hands off the crown's chips!" },
+            _ => new[] { "Hey. That's the house's money.", "Put it back, kid." }
+        };
+    }
+
     private string[] WarningLines()
     {
         return GameOf() switch
@@ -485,7 +535,7 @@ public class TableDealer : MonoBehaviour
             if (material.HasProperty("_EmissionColor"))
             {
                 material.EnableKeyword("_EMISSION");
-                material.SetColor("_EmissionColor", color * eyeGlow);
+                material.SetColor("_EmissionColor", color * eyeGlow * (isEnraged ? rageEyeGlow : 1f));
             }
         }
     }

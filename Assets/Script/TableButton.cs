@@ -13,7 +13,7 @@ public class TableButton : MonoBehaviour
     [SerializeField] private GameObject body;          // Everything you can see and bump into (hidden with the screen button)
     [SerializeField] private Transform cap;            // The dome that sinks when pressed
     [SerializeField] private Renderer capRenderer;
-    [SerializeField] private TMP_Text label;           // Floating text above the button
+    [SerializeField] private TMP_Text label;           // Text printed on top of the dome (sinks with it when pressed)
     [SerializeField] private float standHeight = 0.65f;   // Height of the top of the dome, where the chibi lands
     [SerializeField] private float pressDepth = 0.25f;
     [SerializeField] private float pressTime = 0.12f;
@@ -21,6 +21,7 @@ public class TableButton : MonoBehaviour
 
     private TMP_Text screenLabel;
     private Vector3 capRestPosition;
+    private Vector3 labelRestPosition;
     private Color capColor;
 
     // Visible and unlocked: the button can be pressed right now
@@ -33,6 +34,7 @@ public class TableButton : MonoBehaviour
     {
         screenLabel = screenButton.GetComponentInChildren<TMP_Text>(true);
         capRestPosition = cap.localPosition;
+        labelRestPosition = label.transform.localPosition;
         capColor = capRenderer.material.color;
     }
 
@@ -89,11 +91,18 @@ public class TableButton : MonoBehaviour
     {
         for (float t = 0f; t < duration; t += Time.deltaTime)
         {
-            cap.localPosition = Vector3.Lerp(from, to, t / duration);
+            SetCapPosition(Vector3.Lerp(from, to, t / duration));
             yield return null;
         }
 
-        cap.localPosition = to;
+        SetCapPosition(to);
+    }
+
+    // The label printed on the dome moves down and up with it
+    private void SetCapPosition(Vector3 position)
+    {
+        cap.localPosition = position;
+        label.transform.localPosition = labelRestPosition + (position - capRestPosition);
     }
 
     private Color Darken(Color color, float brightness)

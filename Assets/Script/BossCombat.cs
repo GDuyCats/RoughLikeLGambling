@@ -16,6 +16,8 @@ public struct AttackOutcome
 }
 
 // The giant dealer's attacks: hand slams, combos, feints, sweeps and flicked chips.
+// Each attack is a random string of 1 to 3 of these moves (more when the boss is furious),
+// sometimes overlapping: chips can fly while a hand is still winding up.
 // The chibi can run out of the shadow to dodge, or stay and parry with right click
 // (press = perfect, hold = block). The boss can parry reflected chips and counters back.
 public class BossCombat : MonoBehaviour
@@ -38,6 +40,8 @@ public class BossCombat : MonoBehaviour
         public float LockTime;          // After this the target stops following the chibi
         public float ImpactTime;
         public float FeintTime = -1f;   // Feints fake a slam at this time
+        public float SweepStart;        // Sweeps: when the hand starts crossing the table
+        public float Hover = -1f;       // Slams: how high the hand rises first (-1 = the normal height)
         public Vector3 Target;          // Where it lands, on the table surface
         public Vector3 LaunchPoint;     // Chips: where the chip was flicked from
         public bool Launched;
@@ -85,10 +89,9 @@ public class BossCombat : MonoBehaviour
     [SerializeField] private float slamRadius = 1.6f;
     [SerializeField] private int minComboHits = 2;
     [SerializeField] private int maxComboHits = 3;
-    [SerializeField] private float comboMinGap = 0.7f;        // Time between two slams of a combo
-    [SerializeField] private float comboMaxGap = 1.0f;
+    [SerializeField] private float comboMinGapTime = 0.3f;    // Time between two slams of a combo
+    [SerializeField] private float comboMaxGapTime = 0.5f;
     [SerializeField] private float feintExtraTime = 0.5f;     // How much later the real slam comes after a feint
-    [SerializeField] private float followUpWindup = 0.5f;     // Quick slam after the boss parries a counter
 
     [Header("Sweep")]
     [SerializeField] private float sweepWindup = 1.1f;
@@ -128,6 +131,15 @@ public class BossCombat : MonoBehaviour
     [SerializeField] private float rallyDamageGrowth = 0.15f;
     [SerializeField] private int maxRallies = 5;
 
+    [Header("Tempo (one attack speeds up as it goes)")]
+    [SerializeField] private float tempoPerExchange = 0.1f;     // +10% speed for every hit that lands, is blocked or parried, and every boss parry
+    [SerializeField] private float maxTempo = 1.8f;
+    [SerializeField] private float shortestWindup = 0.15f;      // However fast it gets, a hand always hovers at least this long (at tempo x1)
+
+    [Header("Boss Counter (after the boss parries your counter)")]
+    [SerializeField] private float bossCounterWindup = 0.25f;   // Short wind-up: the same hand bounces up a little and slams again
+    [SerializeField] private float bossCounterHover = 2.5f;
+
     [Header("Colors")]
     [SerializeField] private Color windupColor = Color.white;
     [SerializeField] private Color hitFlashColor = Color.yellow;
@@ -140,8 +152,17 @@ public class BossCombat : MonoBehaviour
     private readonly List<OutgoingShot> outgoing = new List<OutgoingShot>();
 
     private Rigidbody playerBody;
+    private float dropTime;        // How fast a hand slams down in this attack (each boss has its own speed)
+    private float tempo = 1f;      // Grows during one attack: everything left in it gets quicker. Back to 1 for the next attack.
+    private float clock;           // The attack's own time. It runs faster as the tempo grows.
+    private float topTempo;
+    private bool isEnraged;        // Below half health the boss chains more moves and winds up faster
+
+    // A sweep keeps crossing the table after it has passed the chibi
+    private Transform sweepHand;
+    private float sweepVisualStart = -1f;
+    private float sweepLaneZ;
     private TableDealer currentDealer;   // The dealer whose body is fighting (for its lines)
-    private bool chibiMayTalk;           // The chibi shouts a line on its first parry of an attack, and again after each boss parry
     private Color bossOriginalColor;
     private Vector3 leftRestLocal;
     private Vector3 rightRestLocal;
@@ -158,6 +179,9 @@ public class BossCombat : MonoBehaviour
     private int bossParries;
 
     public bool IsAttacking { get; private set; }
+    public bool IsEnraged => isEnraged;
+    public float Tempo => tempo;
+    public float MaxTempo => maxTempo;
 
     // Shared with the dealers' playful slap, so it looks the same as a boss slam
     public GameObject ShadowDiscPrefab => shadowDiscPrefab;
@@ -173,6 +197,7 @@ public class BossCombat : MonoBehaviour
         }
 
         playerBody = player.GetComponent<Rigidbody>();
+        dropTime = slamDropTime;
         leftRestLocal = leftHand.localPosition;
         rightRestLocal = rightHand.localPosition;
 
@@ -200,6 +225,29 @@ public class BossCombat : MonoBehaviour
         leftRestLocal = leftHand.localPosition;
         rightRestLocal = rightHand.localPosition;
         bossOriginalColor = bossRenderer != null ? bossRenderer.material.color : Color.white;
+    }
+
+    // ---------- Tempo ----------
+    // Within one attack, every exchange (a hit landing, blocked or parried, or the boss parrying back)
+    // makes the rest of that attack quicker: the attack's own clock simply runs faster.
+    // The next attack starts at normal speed again.
+
+    private void AddTempo(float amount)
+    {
+        tempo = Mathf.Min(maxTempo, tempo + amount);
+        topTempo = Mathf.Max(topTempo, tempo);
+    }
+
+    // Furious: longer chains and quicker wind-ups. The dealer's eyes blaze and it shouts its line.
+    public void SetEnraged(bool enraged, string line)
+    {
+        bool startsNow = enraged && !isEnraged;
+        isEnraged = enraged;
+
+        if (currentDealer != null)
+        {
+            currentDealer.SetEnraged(enraged, startsNow ? line : null);
+        }
     }
 
     public void StartAttack(int damage, FinalBoss boss, bool canPerfectParry, bool canBlock, float perfectWindowBonus, int rewardBonusPercent, Action<AttackOutcome> onFinished)
@@ -233,25 +281,29 @@ public class BossCombat : MonoBehaviour
         bossParries = 0;
         flashUntil = 0f;
         visualsBusyUntil = 0f;
+        clock = 0f;
+        tempo = 1f;
+        topTempo = 1f;
 
         float window = perfectWindow + perfectWindowBonus;
         float rewardScale = 1f + rewardBonusPercent / 100f;
         float lockoutUntil = 0f;
-        chibiMayTalk = true;
-
-        BossAttackType attack = boss.PickAttack();
-        QueueAttack(attack, damage, boss);
+        dropTime = boss.HandDropTime > 0f ? boss.HandDropTime : slamDropTime;
+        List<BossAttackType> chain = QueueChain(damage, boss);
 
         // Keep going until nothing is flying and every animation has finished
-        while (incoming.Count > 0 || outgoing.Count > 0 || Time.time < visualsBusyUntil)
+        while (incoming.Count > 0 || outgoing.Count > 0 || clock < visualsBusyUntil)
         {
-            float now = Time.time;
+            // The attack's clock runs faster as the tempo grows. Parry timing stays in real seconds.
+            clock += Time.deltaTime * tempo;
+            float now = clock;
+            float timingWindow = window * tempo;
 
             // A press counts as a perfect parry for a hit inside the window.
             // A press with no hit nearby is a whiff and locks parrying for a moment.
             if (canPerfectParry && !ParryFreeze.IsFrozen && WasParryPressed() && now >= lockoutUntil)
             {
-                IncomingHit hit = FindHitInWindow(now, window);
+                IncomingHit hit = FindHitInWindow(now, timingWindow);
 
                 if (hit != null)
                 {
@@ -260,7 +312,7 @@ public class BossCombat : MonoBehaviour
                 }
                 else
                 {
-                    lockoutUntil = now + whiffLockout;
+                    lockoutUntil = now + whiffLockout * tempo;
                 }
             }
 
@@ -285,12 +337,11 @@ public class BossCombat : MonoBehaviour
                 {
                     hit.FreezeShown = true;
                     Vector3 contact = hit.Hand != null ? Vector3.Lerp(hit.Hand.position, player.position, 0.5f) : player.position;
-                    ParryFreeze.PlayerParried(player, contact, chibiMayTalk);
-                    chibiMayTalk = false;
+                    ParryFreeze.PlayerParried(player, contact, true);   // A line on every parry, combo hits included
                 }
 
                 // Wait a moment after impact, so a slightly late press can still be perfect
-                if (now >= hit.ImpactTime + window)
+                if (now >= hit.ImpactTime + timingWindow)
                 {
                     incoming.Remove(hit);
                     ResolveIncoming(hit, boss, canBlock, rewardScale);
@@ -315,51 +366,112 @@ public class BossCombat : MonoBehaviour
         ClearObjects();
         HideVisuals();
 
-        outcome.Message = BuildResultMessage(attack);
+        outcome.Message = BuildResultMessage(chain);
         IsAttacking = false;
         onFinished?.Invoke(outcome);
     }
 
     // ---------- Building attacks ----------
 
-    private void QueueAttack(BossAttackType attack, int damage, FinalBoss boss)
+    // A random string of moves, one after another with short random pauses.
+    // A chip volley and a hand move may overlap (the other hand is free to flick chips).
+    // The damage is shared between all the moves.
+    private List<BossAttackType> QueueChain(int damage, FinalBoss boss)
     {
-        switch (attack)
+        int moves = Random.Range(boss.MinChainMoves, boss.MaxChainMoves + 1) + (isEnraged ? boss.RageExtraMoves : 0);
+        moves = Mathf.Clamp(moves, 1, Mathf.Max(1, damage));
+
+        List<BossAttackType> chain = new List<BossAttackType>();
+        float previousStart = clock;
+        float previousEnd = clock;
+        BossAttackType previous = BossAttackType.Slam;
+
+        for (int i = 0; i < moves; i++)
         {
-            case BossAttackType.SlapCombo:
-                QueueCombo(damage, boss);
-                break;
-            case BossAttackType.Feint:
-                QueueSlam(damage, Time.time, RandomWindup(boss), 0, null, true);
-                break;
-            case BossAttackType.Sweep:
-                QueueSweep(damage);
-                break;
-            case BossAttackType.ChipFlick:
-                QueueChips(damage, boss);
-                break;
-            default:
-                QueueSlam(damage, Time.time, RandomWindup(boss), 0, null, false);
-                break;
+            BossAttackType attack = boss.PickAttack();
+            float start = clock;
+
+            if (i > 0)
+            {
+                bool oneIsChips = (attack == BossAttackType.ChipFlick) != (previous == BossAttackType.ChipFlick);
+
+                start = oneIsChips && Random.value < boss.OverlapChance
+                    ? Mathf.Lerp(previousStart, previousEnd, Random.Range(0.2f, 0.6f))
+                    : previousEnd + Random.Range(boss.ChainMinGap, boss.ChainMaxGap);
+            }
+
+            float end = QueueAttack(attack, GetDamageShare(damage, moves, i), boss, start);
+
+            chain.Add(attack);
+            previousStart = start;
+            previousEnd = Mathf.Max(previousEnd, end);
+            previous = attack;
+        }
+
+        SpaceOutImpacts();
+        return chain;
+    }
+
+    // Returns when the move is over (its last hit, or the end of a sweep)
+    private float QueueAttack(BossAttackType attack, int damage, FinalBoss boss, float start)
+    {
+        return attack switch
+        {
+            BossAttackType.SlapCombo => QueueCombo(damage, boss, start),
+            BossAttackType.Feint => QueueSlam(damage, start, RandomWindup(boss), 0, null, true),
+            BossAttackType.Sweep => QueueSweep(damage, start),
+            BossAttackType.ChipFlick => QueueChips(damage, boss, start),
+            _ => QueueSlam(damage, start, RandomWindup(boss), 0, null, false)
+        };
+    }
+
+    // Two hits landing almost together can't both be parried: keep them a little apart
+    private void SpaceOutImpacts()
+    {
+        const float minimumGap = 0.22f;
+        incoming.Sort((a, b) => a.ImpactTime.CompareTo(b.ImpactTime));
+
+        for (int i = 1; i < incoming.Count; i++)
+        {
+            IncomingHit hit = incoming[i];
+            float earliest = incoming[i - 1].ImpactTime + minimumGap;
+
+            if (hit.ImpactTime >= earliest || hit.Kind == HitKind.Sweep)
+            {
+                continue;
+            }
+
+            float shift = earliest - hit.ImpactTime;
+            hit.ImpactTime += shift;
+            hit.StartTime += shift;
+            hit.LockTime += shift;
+
+            if (hit.FeintTime > 0f)
+            {
+                hit.FeintTime += shift;
+            }
         }
     }
 
-    // The wind-up must be long enough for the hand to rise and the shadow to lock
+    // How long a hand hovers before slamming. Furious bosses are quicker.
+    // (With dodging on, it must also be long enough for the shadow to lock.)
     private float RandomWindup(FinalBoss boss)
     {
-        return Mathf.Max(shadowLockTime + 0.2f, Random.Range(boss.MinWindup, boss.MaxWindup));
+        float windup = Random.Range(boss.MinWindup, boss.MaxWindup) * (isEnraged ? boss.RageWindupScale : 1f);
+        float shortest = allowDodging ? shadowLockTime + 0.2f : shortestWindup;
+        return Mathf.Max(shortest, windup);
     }
 
     // Returns when the slam lands, so combos can chain one slam after another
-    private float QueueSlam(int damage, float startTime, float windup, int rally, Transform hand, bool feint)
+    private float QueueSlam(int damage, float startTime, float windup, int rally, Transform hand, bool feint, float hover = -1f)
     {
-        float impact = startTime + windup + slamDropTime;
+        float impact = startTime + windup + dropTime;
         float feintTime = -1f;
 
         if (feint)
         {
             // Fake the drop when the slam "should" land, then slam for real a bit later
-            feintTime = impact - slamDropTime;
+            feintTime = impact - dropTime;
             impact += feintExtraTime;
         }
 
@@ -369,9 +481,10 @@ public class BossCombat : MonoBehaviour
             Hand = hand != null ? hand : ClosestHand(player.position),
             Shadow = SpawnShadow(shadowDiscPrefab, slamRadius * 2f, slamRadius * 2f),
             StartTime = startTime,
-            LockTime = impact - slamDropTime - shadowLockTime,
+            LockTime = impact - dropTime - shadowLockTime,
             ImpactTime = impact,
             FeintTime = feintTime,
+            Hover = hover,
             Target = FlatPlayerPosition(),
             Damage = damage,
             Rally = rally
@@ -381,28 +494,31 @@ public class BossCombat : MonoBehaviour
     }
 
     // Left and right hands take turns
-    private void QueueCombo(int damage, FinalBoss boss)
+    private float QueueCombo(int damage, FinalBoss boss, float start)
     {
         int count = Random.Range(minComboHits, maxComboHits + 1);
-        float start = Time.time;
         float windup = RandomWindup(boss);
         Transform hand = ClosestHand(player.position);
+        float impact = start;
 
         for (int i = 0; i < count; i++)
         {
-            float impact = QueueSlam(GetDamageShare(damage, count, i), start, windup, 0, hand, false);
+            impact = QueueSlam(GetDamageShare(damage, count, i), start, windup, 0, hand, false);
 
             start = impact;
-            windup = Random.Range(comboMinGap, comboMaxGap) - slamDropTime;
+            float gap = Random.Range(comboMinGapTime, comboMaxGapTime) * (isEnraged ? boss.RageWindupScale : 1f);
+            windup = Mathf.Max(0.05f, gap - dropTime);
             hand = hand == leftHand ? rightHand : leftHand;
         }
+
+        return impact;
     }
 
     // One hand sweeps across a whole lane of the table
-    private void QueueSweep(int damage)
+    private float QueueSweep(int damage, float start)
     {
-        float start = Time.time;
-        float impact = start + sweepWindup + sweepTime * 0.5f;
+        float sweepStart = start + sweepWindup * (isEnraged ? 0.8f : 1f);
+        Vector3 target = FlatPlayerPosition();
 
         incoming.Add(new IncomingHit
         {
@@ -410,22 +526,38 @@ public class BossCombat : MonoBehaviour
             Hand = leftHand,
             Shadow = SpawnShadow(shadowLanePrefab, sweepHalfLength * 2f, sweepLaneHalfWidth * 2f),
             StartTime = start,
-            LockTime = impact - sweepTime * 0.5f - shadowLockTime,
-            ImpactTime = impact,
-            Target = FlatPlayerPosition(),
+            SweepStart = sweepStart,
+            LockTime = sweepStart - shadowLockTime,
+            ImpactTime = SweepContactTime(sweepStart, target),
+            Target = target,
             Damage = damage
         });
+
+        // Keep the attack going until the hand has crossed the whole table
+        visualsBusyUntil = Mathf.Max(visualsBusyUntil, sweepStart + sweepTime + 0.1f);
+        return sweepStart + sweepTime;
+    }
+
+    // The sweep crosses the table from left to right: it reaches the chibi when it passes the chibi's spot,
+    // not in the middle of the table. The parry timing and the freeze use this moment.
+    private float SweepContactTime(float sweepStart, Vector3 target)
+    {
+        float laneStartX = bossModel.position.x - sweepHalfLength;
+        float progress = Mathf.Clamp((target.x - laneStartX) / (sweepHalfLength * 2f), 0.02f, 0.98f);
+        return sweepStart + sweepTime * progress;
     }
 
     // A volley of chips with random gaps, each one aimed when it is flicked
-    private void QueueChips(int damage, FinalBoss boss)
+    private float QueueChips(int damage, FinalBoss boss, float startTime)
     {
         int count = Random.Range(boss.MinChips, boss.MaxChips + 1);
-        float nextImpact = Time.time + Random.Range(firstChipMinTime, firstChipMaxTime);
+        float nextImpact = startTime + Random.Range(firstChipMinTime, firstChipMaxTime);
+        float flight = chipFlightTime;
+        float lastImpact = nextImpact;
 
         for (int i = 0; i < count; i++)
         {
-            float start = nextImpact - chipFlightTime;
+            float start = nextImpact - flight;
 
             incoming.Add(new IncomingHit
             {
@@ -439,8 +571,11 @@ public class BossCombat : MonoBehaviour
                 Damage = GetDamageShare(damage, count, i)
             });
 
-            nextImpact += Random.Range(boss.ChipMinGap, boss.ChipMaxGap);
+            lastImpact = nextImpact;
+            nextImpact += Mathf.Max(0.18f, Random.Range(boss.ChipMinGap, boss.ChipMaxGap));
         }
+
+        return lastImpact;
     }
 
     // ---------- Each frame ----------
@@ -470,6 +605,12 @@ public class BossCombat : MonoBehaviour
         if (now < hit.LockTime || (!allowDodging && !hit.Landed))
         {
             hit.Target = FlatPlayerPosition();
+        }
+
+        // Until the hand starts moving, the sweep's moment of contact follows where the chibi stands
+        if (hit.Kind == HitKind.Sweep && now < hit.SweepStart)
+        {
+            hit.ImpactTime = SweepContactTime(hit.SweepStart, hit.Target);
         }
     }
     private void Land(IncomingHit hit)
@@ -523,6 +664,9 @@ public class BossCombat : MonoBehaviour
             return;
         }
 
+        // Every exchange speeds up the rest of this attack
+        AddTempo(tempoPerExchange);
+
         int damage = GetRallyDamage(hit.Damage, hit.Rally);
 
         if (hit.Perfected)
@@ -538,8 +682,8 @@ public class BossCombat : MonoBehaviour
                 {
                     Bullet = hit.Bullet,
                     From = player.position,
-                    StartTime = Time.time,
-                    ArriveTime = Time.time + flight,
+                    StartTime = clock,
+                    ArriveTime = clock + flight,
                     Damage = hit.Damage,
                     Rally = hit.Rally
                 });
@@ -581,6 +725,7 @@ public class BossCombat : MonoBehaviour
             bossParries++;
             Flash(bossParryColor);
             AudioManager.Play(SoundId.BossParry);
+            AddTempo(tempoPerExchange);
 
             float flight = chipFlightTime * Mathf.Pow(rallySpeedUp, shot.Rally + 1);
 
@@ -589,9 +734,9 @@ public class BossCombat : MonoBehaviour
                 Kind = HitKind.Chip,
                 Bullet = shot.Bullet,
                 Shadow = SpawnShadow(shadowDiscPrefab, chipHitRadius * 2f, chipHitRadius * 2f),
-                StartTime = Time.time,
-                LockTime = Time.time,
-                ImpactTime = Time.time + flight,
+                StartTime = clock,
+                LockTime = clock,
+                ImpactTime = clock + flight,
                 LaunchPoint = head.position,
                 Launched = true,
                 Target = PredictPlayerPosition(flight),
@@ -624,10 +769,10 @@ public class BossCombat : MonoBehaviour
             Vector3 contact = hit.Hand != null ? hit.Hand.position : head.position;
             string line = currentDealer != null ? currentDealer.PickBossParryLine() : null;
             ParryFreeze.BossParried(bossModel, head, contact, line);
-            chibiMayTalk = true;
 
-            Transform otherHand = hit.Hand == leftHand ? rightHand : leftHand;
-            QueueSlam(hit.Damage, Time.time, followUpWindup, hit.Rally + 1, otherHand, false);
+            // The same hand bounces up a little and slams again right away: hardly any time to react
+            AddTempo(tempoPerExchange);
+            QueueSlam(hit.Damage, clock, bossCounterWindup, hit.Rally + 1, hit.Hand, false, bossCounterHover);
             return;
         }
 
@@ -716,25 +861,37 @@ public class BossCombat : MonoBehaviour
             }
         }
 
+        // A sweep that already passed the chibi keeps going to the other side of the table
+        if (job == null && hand == sweepHand && now < sweepVisualStart + sweepTime)
+        {
+            float progress = Mathf.Clamp01((now - sweepVisualStart) / sweepTime);
+            Vector3 laneStart = new Vector3(bossModel.position.x - sweepHalfLength, 0.5f, sweepLaneZ);
+            hand.position = Vector3.Lerp(laneStart, laneStart + Vector3.right * sweepHalfLength * 2f, progress);
+            return;
+        }
+
         if (job == null || now < job.StartTime)
         {
-            hand.position = Vector3.Lerp(hand.position, rest, 10f * Time.deltaTime);
+            hand.position = Vector3.Lerp(hand.position, rest, 10f * tempo * Time.deltaTime);
             return;
         }
 
         if (job.Kind == HitKind.Sweep)
         {
-            float sweepStart = job.ImpactTime - sweepTime * 0.5f;
             Vector3 laneStart = new Vector3(bossModel.position.x - sweepHalfLength, 0.5f, job.Target.z);
 
-            if (now < sweepStart)
+            if (now < job.SweepStart)
             {
                 // Get into position at the side of the lane, a little raised
-                hand.position = Vector3.Lerp(hand.position, laneStart + Vector3.up * 2f, 8f * Time.deltaTime);
+                hand.position = Vector3.Lerp(hand.position, laneStart + Vector3.up * 2f, 8f * tempo * Time.deltaTime);
             }
             else
             {
-                float progress = Mathf.Clamp01((now - sweepStart) / sweepTime);
+                sweepHand = hand;
+                sweepVisualStart = job.SweepStart;
+                sweepLaneZ = job.Target.z;
+
+                float progress = Mathf.Clamp01((now - job.SweepStart) / sweepTime);
                 hand.position = Vector3.Lerp(laneStart, laneStart + Vector3.right * sweepHalfLength * 2f, progress);
             }
 
@@ -742,22 +899,23 @@ public class BossCombat : MonoBehaviour
         }
 
         // Slam: hover above the target, (maybe fake a drop), then smash down
-        float dropStart = job.ImpactTime - slamDropTime;
-        Vector3 hover = job.Target + Vector3.up * hoverHeight;
+        float dropStart = job.ImpactTime - dropTime;
+        float height = job.Hover > 0f ? job.Hover : hoverHeight;
+        Vector3 hover = job.Target + Vector3.up * height;
 
         if (job.FeintTime > 0f && Mathf.Abs(now - job.FeintTime) < 0.15f)
         {
             float dip = 1f - Mathf.Abs(now - job.FeintTime) / 0.15f;
-            hover.y -= hoverHeight * 0.6f * dip;
+            hover.y -= height * 0.6f * dip;
         }
 
         if (now < dropStart)
         {
-            hand.position = Vector3.Lerp(hand.position, hover, 12f * Time.deltaTime);
+            hand.position = Vector3.Lerp(hand.position, hover, 12f * tempo * Time.deltaTime);
         }
         else
         {
-            float progress = Mathf.Clamp01((now - dropStart) / slamDropTime);
+            float progress = Mathf.Clamp01((now - dropStart) / dropTime);
             hand.position = Vector3.Lerp(hover, job.Target + Vector3.up * 0.5f, progress);
         }
     }
@@ -895,11 +1053,11 @@ public class BossCombat : MonoBehaviour
     private void Flash(Color color)
     {
         flashColor = color;
-        flashUntil = Time.time + 0.15f;
+        flashUntil = clock + 0.15f;
         visualsBusyUntil = Mathf.Max(visualsBusyUntil, flashUntil);
     }
 
-    private string BuildResultMessage(BossAttackType attack)
+    private string BuildResultMessage(List<BossAttackType> chain)
     {
         List<string> parts = new List<string>();
 
@@ -909,14 +1067,21 @@ public class BossCombat : MonoBehaviour
         if (dodges > 0) parts.Add($"{dodges} dodged");
         if (hits > 0) parts.Add($"{hits} hit");
 
-        string attackName = attack switch
+        List<string> names = new List<string>();
+
+        foreach (BossAttackType attack in chain)
         {
-            BossAttackType.SlapCombo => "Slap combo",
-            BossAttackType.Feint => "Feint",
-            BossAttackType.Sweep => "Sweep",
-            BossAttackType.ChipFlick => "Chip flick",
-            _ => "Slam"
-        };
+            names.Add(attack switch
+            {
+                BossAttackType.SlapCombo => "Slap combo",
+                BossAttackType.Feint => "Feint",
+                BossAttackType.Sweep => "Sweep",
+                BossAttackType.ChipFlick => "Chip flick",
+                _ => "Slam"
+            });
+        }
+
+        string attackName = (isEnraged ? "FURIOUS " : "") + string.Join(" + ", names);
 
         string message = $"{attackName}: {string.Join(", ", parts)}. You take {outcome.DamageTaken} damage";
 
@@ -928,6 +1093,11 @@ public class BossCombat : MonoBehaviour
         if (outcome.HealAmount > 0)
         {
             message += $", you heal {outcome.HealAmount}";
+        }
+
+        if (topTempo > 1.05f)
+        {
+            message += $". Tempo reached x{topTempo:0.0}";
         }
 
         return message + ".";
@@ -976,6 +1146,8 @@ public class BossCombat : MonoBehaviour
 
     private void ResetHands()
     {
+        sweepHand = null;
+        sweepVisualStart = -1f;
         leftHand.localPosition = leftRestLocal;
         rightHand.localPosition = rightRestLocal;
     }

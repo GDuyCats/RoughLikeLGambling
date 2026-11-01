@@ -7,6 +7,7 @@ using UnityEngine.UI;
 // The Blackjack minigame: get closer to 21 than the dealer without going over.
 // Cards are dealt onto the table: the dealer's row, and the player's hand(s).
 // Casino split rules: split a pair of equal value into up to 4 hands.
+// When the dealer shows an ace, the player is offered insurance (or even money with a blackjack).
 public class BlackjackGame : MonoBehaviour
 {
     private const int BlackjackValue = 21;
@@ -45,7 +46,7 @@ public class BlackjackGame : MonoBehaviour
     [SerializeField] private Transform dealerRowStart;    // The dealer's first card; the rest line up to the right
     [SerializeField] private Transform playerRowStart;
     [SerializeField] private Transform discardSpot;       // Old cards fly away here
-    [SerializeField] private Transform activeHandMarker;  // Glowing marker under the hand being played (after a split)
+    [SerializeField] private Transform activeHandMarker;  // Old glowing disc: now hidden, its material colors the arrow
     [SerializeField] private float cardSpacing = 2f;      // Distance between cards in a row (a bit more than a card's width)
     [SerializeField] private float handSpacing = 4f;      // Distance between split hands
     [SerializeField] private float splitCardOffset = 0.7f;   // Cards in a split hand overlap, fanned by this much
@@ -57,6 +58,26 @@ public class BlackjackGame : MonoBehaviour
     [SerializeField] private int maxHands = 4;
     [SerializeField] private int splitBonusPerHand = 2;   // Boss fight: each extra winning (or losing) hand adds this much
     [SerializeField] private bool allowSurrender = true;  // Untick to remove the surrender option completely
+
+    [Header("Numbers on the Table")]
+    [SerializeField] private bool showScreenTotals = false;   // The old "Dealer / You" totals on the screen
+    [SerializeField] private float cardHalfLength = 1.3f;     // Half a card's length on the table
+    [SerializeField] private float totalFontSize = 8f;
+    [SerializeField] private Color totalColor = Color.white;
+    [SerializeField] private Color activeTotalColor = new Color(1f, 0.84f, 0.31f);   // The hand being played, after a split
+    [SerializeField] private Color bustColor = new Color(1f, 0.35f, 0.35f);
+
+    [Header("Active Hand Arrow")]
+    [SerializeField] private float arrowLength = 1.4f;
+    [SerializeField] private float arrowWidth = 1.1f;
+    [SerializeField] private float arrowGap = 0.35f;     // Space between the hand's number and the arrow's tip
+    [SerializeField] private float arrowBob = 0.15f;     // The arrow nudges toward the hand like this
+    [SerializeField] private float arrowBobSpeed = 6f;
+
+    [Header("Insurance")]
+    [SerializeField] private Button insuranceButton;      // INSURANCE, or EVEN MONEY when the player has a blackjack
+    [SerializeField] private Button noInsuranceButton;    // NO THANKS
+    [SerializeField] private bool allowInsurance = true;  // Untick to remove insurance and even money completely
 
     [Header("Animation")]
     [SerializeField] private float dealDelay = 0.2f;         // Time between cards when dealing a new hand
@@ -71,6 +92,7 @@ public class BlackjackGame : MonoBehaviour
     private TMP_Text doubleButtonText;
     private TMP_Text splitButtonText;
     private TMP_Text surrenderButtonText;
+    private TMP_Text insuranceButtonText;
 
     private int activeIndex;           // Which hand the player is playing now
     private bool isHandInProgress;
@@ -79,8 +101,21 @@ public class BlackjackGame : MonoBehaviour
     private bool dealerCardRevealed;   // Has the dealer's face-down card been turned over?
     private int runningAnimations;     // How many card animations are still playing
 
+    private TextMeshPro dealerTotal;   // Numbers lying on the table
+    private readonly List<TextMeshPro> handTotals = new List<TextMeshPro>();
+    private Transform handArrow;
+    private Vector3 arrowTip;
+
+    private bool isAskingInsurance;    // The dealer shows an ace: waiting for the player's answer
+    private bool isEvenMoneyOffer;     // The player has a blackjack, so the offer is even money
+    private int insuranceChoice;       // 0 = no answer yet, 1 = took it, 2 = no thanks
+    private int insuranceResult;       // Chips won (+) or lost (-) on insurance, added when the hand is settled
+    private string insuranceNote;      // The insurance line in the result message
+
     private PlayerHand ActiveHand => hands.Count > 0 ? hands[Mathf.Min(activeIndex, hands.Count - 1)] : null;
     private bool HasBlackjackAfterSplit => run.GetUpgradeTotal(UpgradeType.BlackjackAfterSplit) > 0;
+    private bool HasInsurance => allowInsurance && insuranceButton != null && noInsuranceButton != null;
+    private int InsurancePayout => 2 + run.GetUpgradeTotal(UpgradeType.InsurancePayout);   // Pays this many to 1
 
     private void Awake()
     {
@@ -95,6 +130,36 @@ public class BlackjackGame : MonoBehaviour
         doubleButton.onClick.AddListener(DoubleDown);
         splitButton.onClick.AddListener(Split);
         surrenderButton.onClick.AddListener(Surrender);
+
+        if (insuranceButton != null)
+        {
+            insuranceButtonText = insuranceButton.GetComponentInChildren<TMP_Text>();
+            insuranceButton.onClick.AddListener(TakeInsurance);
+        }
+
+        if (noInsuranceButton != null)
+        {
+            noInsuranceButton.onClick.AddListener(DeclineInsurance);
+        }
+
+        CreateTableNumbers();
+        CreateHandArrow();
+
+        if (!showScreenTotals)
+        {
+            dealerText.gameObject.SetActive(false);
+            playerText.gameObject.SetActive(false);
+        }
+    }
+
+    // The arrow nudges toward the hand being played
+    private void Update()
+    {
+        if (handArrow != null && handArrow.gameObject.activeSelf)
+        {
+            float nudge = (Mathf.Sin(Time.time * arrowBobSpeed) + 1f) * 0.5f * arrowBob;
+            handArrow.position = arrowTip + Vector3.forward * nudge;
+        }
     }
 
     private void OnEnable()
@@ -121,6 +186,7 @@ public class BlackjackGame : MonoBehaviour
         isDealerTurn = false;
         isAnimating = false;
         dealerCardRevealed = false;
+        ClearInsurance();
 
         run.SetMinigameBusy(false);
         run.ShowMessage("Press DEAL to start a hand.");
@@ -151,6 +217,8 @@ public class BlackjackGame : MonoBehaviour
         dealerHand.Clear();
         dealerCards.Clear();
         activeIndex = 0;
+        ClearInsurance();
+        RefreshUI();   // The old hand's numbers and arrow go away with its cards
 
         run.SetMinigameBusy(true);
         yield return DiscardAllRoutine(oldCards);
@@ -172,6 +240,18 @@ public class BlackjackGame : MonoBehaviour
         // Wait until every card has landed and turned over
         yield return new WaitUntil(() => runningAnimations == 0);
         isAnimating = false;
+
+        // The dealer shows an ace: offer insurance (or even money) before checking for blackjack
+        if (HasInsurance && DealerShowsAce())
+        {
+            bool handOver = false;
+            yield return InsuranceRoutine(hand, over => handOver = over);
+
+            if (handOver)
+            {
+                yield break;
+            }
+        }
 
         // A natural blackjack on either side ends the hand right away
         if (IsNaturalBlackjack(hand) || IsDealerBlackjack())
@@ -309,10 +389,18 @@ public class BlackjackGame : MonoBehaviour
         isAnimating = false;
 
         int lossAmount = GetSurrenderLoss();
+        int damage = run.AtBaseBet(GetSurrenderLoss);
         isHandInProgress = false;
 
+        string message = $"Surrendered. -{lossAmount} chips";
+
+        if (insuranceNote != null)
+        {
+            message += "\n" + insuranceNote;
+        }
+
         run.SetMinigameBusy(false);
-        run.FinishPlay(-lossAmount, $"Surrendered. -{lossAmount} chips");
+        run.FinishPlay(-lossAmount + insuranceResult, -damage, message);
     }
 
     // ---------- Moving between hands ----------
@@ -418,7 +506,7 @@ public class BlackjackGame : MonoBehaviour
 
     private bool CanAct()
     {
-        return isHandInProgress && !isDealerTurn && !isAnimating && run.CanPlay && ActiveHand != null;
+        return isHandInProgress && !isDealerTurn && !isAnimating && !isAskingInsurance && run.CanPlay && ActiveHand != null;
     }
 
     // Double and split are only possible on the first two cards of a hand
@@ -493,6 +581,132 @@ public class BlackjackGame : MonoBehaviour
     private bool CanSurrender()
     {
         return allowSurrender && IsOnFirstTwoCards() && hands.Count == 1;
+    }
+
+    // ---------- Insurance and even money ----------
+
+    private bool DealerShowsAce()
+    {
+        return dealerHand.Count >= 1 && GetRank(dealerHand[0]) == 1;
+    }
+
+    // Insurance costs half the bet
+    private int GetInsuranceCost()
+    {
+        return Mathf.CeilToInt(run.GetCurrentBet() / 2f);
+    }
+
+    private bool CanAffordInsurance()
+    {
+        return run.Chips >= run.GetCurrentBet() + GetInsuranceCost();
+    }
+
+    private void TakeInsurance()
+    {
+        if (!isAskingInsurance || insuranceChoice != 0 || (!isEvenMoneyOffer && !CanAffordInsurance()))
+        {
+            return;
+        }
+
+        insuranceChoice = 1;
+    }
+
+    private void DeclineInsurance()
+    {
+        if (!isAskingInsurance || insuranceChoice != 0)
+        {
+            return;
+        }
+
+        insuranceChoice = 2;
+    }
+
+    private void ClearInsurance()
+    {
+        isAskingInsurance = false;
+        isEvenMoneyOffer = false;
+        insuranceChoice = 0;
+        insuranceResult = 0;
+        insuranceNote = null;
+    }
+
+    // Ask the question, wait for the answer, then the dealer checks for blackjack.
+    // Calls back true if the hand is already over (the player took even money).
+    private IEnumerator InsuranceRoutine(PlayerHand hand, System.Action<bool> onDone)
+    {
+        isEvenMoneyOffer = IsNaturalBlackjack(hand);
+        isAskingInsurance = true;
+        insuranceChoice = 0;
+        run.ShowMessage(BuildInsuranceMessage(hand));
+        RefreshUI();
+
+        yield return new WaitUntil(() => insuranceChoice != 0);
+
+        bool took = insuranceChoice == 1;
+        isAskingInsurance = false;
+        RefreshUI();
+
+        // Even money: a sure win, paid like a normal win, and the hand ends right here
+        if (isEvenMoneyOffer && took)
+        {
+            int chips = GetWinAmount(hand, winMultiplier);
+            int damage = run.AtBaseBet(() => GetWinAmount(hand, winMultiplier));
+
+            yield return RevealDealerCard();
+            isHandInProgress = false;
+            run.SetMinigameBusy(false);
+            RefreshUI();
+            run.FinishPlay(chips, damage, $"Even money! +{chips} chips");
+            onDone(true);
+            yield break;
+        }
+
+        if (took)
+        {
+            int cost = GetInsuranceCost();
+
+            if (IsDealerBlackjack())
+            {
+                insuranceResult = cost * InsurancePayout;
+                insuranceNote = $"Insurance pays {InsurancePayout} to 1: +{insuranceResult} chips";
+            }
+            else
+            {
+                insuranceResult = -cost;
+                insuranceNote = $"Insurance lost: -{cost} chips";
+            }
+        }
+
+        // The dealer peeks at the face-down card
+        run.ShowMessage("The dealer checks for blackjack...");
+        yield return new WaitForSeconds(0.7f);
+
+        if (!IsDealerBlackjack())
+        {
+            run.ShowMessage(took ? "No blackjack. Insurance lost." : "No blackjack. Play on!");
+            yield return new WaitForSeconds(0.9f);
+        }
+
+        onDone(false);
+    }
+
+    private string BuildInsuranceMessage(PlayerHand hand)
+    {
+        if (isEvenMoneyOffer)
+        {
+            return $"Dealer shows an Ace! Take EVEN MONEY for a sure +{GetWinAmount(hand, winMultiplier)} chips, "
+                + "or say NO THANKS and hope the dealer has no blackjack.";
+        }
+
+        string message = $"Dealer shows an Ace! INSURANCE costs {GetInsuranceCost()} chips and pays {InsurancePayout} to 1 "
+            + "if the dealer has blackjack.";
+
+        if (!CanAffordInsurance())
+        {
+            message += $" (Not enough chips: you need {run.GetCurrentBet() + GetInsuranceCost()}.)";
+        }
+
+        return message;
     }
 
     // ---------- Cards on the table ----------
@@ -661,9 +875,24 @@ public class BlackjackGame : MonoBehaviour
         int losingHands = 0;
         List<string> results = new List<string>();
 
+        int damageDealt = 0;    // Boss fight: worked out at bet x1, so the bet level only changes chips
+        int damageTaken = 0;
+
         for (int i = 0; i < hands.Count; i++)
         {
-            int change = SettleHand(hands[i], out string reason);
+            PlayerHand settled = hands[i];
+            int change = SettleHand(settled, out string reason);
+            int damage = run.AtBaseBet(() => SettleHand(settled, out _));
+
+            if (damage > 0)
+            {
+                damageDealt += damage;
+            }
+            else
+            {
+                damageTaken -= damage;
+            }
+
             string chipsPart = change > 0 ? $"+{change}" : change < 0 ? $"{change}" : "0";
 
             results.Add(hands.Count > 1 ? $"Hand {i + 1}: {reason} {chipsPart}" : $"{reason} {chipsPart} chips");
@@ -685,23 +914,38 @@ public class BlackjackGame : MonoBehaviour
             }
         }
 
-        // Boss fight: each extra winning or losing hand adds a small flat bonus
+        // Boss fight: each extra winning or losing hand adds a little damage
         if (run.IsBossFight)
         {
-            chipsWon += splitBonusPerHand * Mathf.Max(0, winningHands - 1);
-            chipsLost += splitBonusPerHand * Mathf.Max(0, losingHands - 1);
+            damageDealt += splitBonusPerHand * Mathf.Max(0, winningHands - 1);
+            damageTaken += splitBonusPerHand * Mathf.Max(0, losingHands - 1);
+        }
+
+        // Insurance only ever moves chips, never damage
+        if (insuranceResult > 0)
+        {
+            chipsWon += insuranceResult;
+        }
+        else
+        {
+            chipsLost -= insuranceResult;
+        }
+
+        if (insuranceNote != null)
+        {
+            results.Add(insuranceNote);
         }
 
         string message = string.Join("\n", results);
 
-        if (hands.Count > 1)
+        if (hands.Count > 1 || insuranceNote != null)
         {
             int total = chipsWon - chipsLost;
             message += total >= 0 ? $"\nTotal: +{total} chips" : $"\nTotal: {total} chips";
         }
 
         run.SetMinigameBusy(false);
-        run.FinishMixedPlay(chipsWon, chipsLost, message);
+        run.FinishMixedPlay(chipsWon, chipsLost, damageDealt, damageTaken, message);
     }
 
     // How many chips one hand wins (positive) or loses (negative) against the dealer
@@ -898,13 +1142,29 @@ public class BlackjackGame : MonoBehaviour
 
         playerText.text = BuildPlayerLabel();
 
-        // DEAL between hands; the other buttons during a hand
+        // DEAL between hands; the other buttons during a hand; only the two insurance buttons while insurance is offered
+        bool playing = isHandInProgress && !isAskingInsurance;
         dealButton.gameObject.SetActive(!isHandInProgress);
-        hitButton.gameObject.SetActive(isHandInProgress);
-        standButton.gameObject.SetActive(isHandInProgress);
-        doubleButton.gameObject.SetActive(isHandInProgress);
-        splitButton.gameObject.SetActive(isHandInProgress);
-        surrenderButton.gameObject.SetActive(isHandInProgress && allowSurrender);
+        hitButton.gameObject.SetActive(playing);
+        standButton.gameObject.SetActive(playing);
+        doubleButton.gameObject.SetActive(playing);
+        splitButton.gameObject.SetActive(playing);
+        surrenderButton.gameObject.SetActive(playing && allowSurrender);
+
+        if (HasInsurance)
+        {
+            insuranceButton.gameObject.SetActive(isAskingInsurance);
+            noInsuranceButton.gameObject.SetActive(isAskingInsurance);
+            insuranceButton.interactable = isAskingInsurance && (isEvenMoneyOffer || CanAffordInsurance());
+            noInsuranceButton.interactable = isAskingInsurance;
+
+            if (insuranceButtonText != null && isAskingInsurance)
+            {
+                insuranceButtonText.text = isEvenMoneyOffer
+                    ? $"EVEN MONEY\nTake +{GetWinAmount(hands[0], winMultiplier)} chips"
+                    : $"INSURANCE\nBet +{GetInsuranceCost()} chips";
+            }
+        }
 
         dealButton.interactable = run.CanPlay && !isAnimating;
         hitButton.interactable = CanAct();
@@ -919,7 +1179,8 @@ public class BlackjackGame : MonoBehaviour
         splitButtonText.text = $"SPLIT\nBet +{bet} chips";
         surrenderButtonText.text = $"SURRENDER\nLose {Mathf.CeilToInt(Mathf.Max(0, bet - run.GetUpgradeTotal(UpgradeType.LossReduction)) / 2f)} chips";
 
-        UpdateActiveHandMarker();
+        UpdateTableNumbers();
+        UpdateHandArrow();
     }
 
     // "You 18", or with split hands "You 12  [18]  20" (the active hand in brackets)
@@ -947,26 +1208,197 @@ public class BlackjackGame : MonoBehaviour
         return "You\n" + string.Join("  ", values);
     }
 
-    // The glowing marker sits under the hand being played, only when there are split hands
-    private void UpdateActiveHandMarker()
+    // ---------- Numbers and arrow on the table ----------
+
+    // The dealer's total sits left of the dealer's cards; each hand's total sits just below it
+    private void UpdateTableNumbers()
     {
-        if (activeHandMarker == null)
+        if (dealerTotal != null)
+        {
+            bool showDealer = dealerHand.Count > 0;
+            dealerTotal.gameObject.SetActive(showDealer);
+
+            if (showDealer)
+            {
+                string value = !dealerCardRevealed && dealerHand.Count >= 2
+                    ? $"{GetCardValue(GetRank(dealerHand[0]))} + ?"
+                    : TotalText(dealerHand, false);
+
+                dealerTotal.text = $"<size=55%>DEALER</size>\n{value}";
+                dealerTotal.color = HandValue(dealerHand) > BlackjackValue && dealerCardRevealed ? bustColor : totalColor;
+                dealerTotal.transform.position = OnTable(DealerSlot(0) + Vector3.left * (cardSpacing * 0.5f + 0.3f));
+            }
+        }
+
+        bool split = hands.Count > 1;
+        bool playing = isHandInProgress && !isDealerTurn;
+
+        for (int i = 0; i < handTotals.Count; i++)
+        {
+            TextMeshPro total = handTotals[i];
+            bool show = i < hands.Count && hands[i].CardObjects.Count > 0;
+            total.gameObject.SetActive(show);
+
+            if (!show)
+            {
+                continue;
+            }
+
+            PlayerHand hand = hands[i];
+            int value = HandValue(hand.Cards);
+            total.text = TotalText(hand.Cards, IsNaturalBlackjack(hand));
+            total.color = value > BlackjackValue ? bustColor
+                : split && playing && i == activeIndex ? activeTotalColor
+                : totalColor;
+            total.transform.position = OnTable(HandCenter(i) + Vector3.back * (cardHalfLength + 0.5f));
+        }
+    }
+
+    private string TotalText(List<int> cards, bool naturalBlackjack)
+    {
+        int value = HandValue(cards);
+
+        if (value > BlackjackValue)
+        {
+            return "BUST";
+        }
+
+        return naturalBlackjack ? "BLACKJACK" : value.ToString();
+    }
+
+    // The arrow points at the hand being played, only when there are split hands
+    private void UpdateHandArrow()
+    {
+        if (handArrow == null)
         {
             return;
         }
 
-        bool show = isHandInProgress && !isDealerTurn && hands.Count > 1 && ActiveHand.CardObjects.Count > 0;
-        activeHandMarker.gameObject.SetActive(show);
+        bool show = isHandInProgress && !isDealerTurn && !isAskingInsurance && hands.Count > 1 && ActiveHand.CardObjects.Count > 0;
+        handArrow.gameObject.SetActive(show);
 
-        if (!show)
+        if (show)
         {
-            return;
+            // Below the hand's number, pointing up at the cards
+            arrowTip = OnTable(HandCenter(activeIndex) + Vector3.back * (cardHalfLength + 1f + arrowGap));
+            handArrow.position = arrowTip;
+        }
+    }
+
+    // The middle of a hand's cards on the table
+    private Vector3 HandCenter(int handIndex)
+    {
+        int cardCount = Mathf.Max(1, hands[handIndex].CardObjects.Count);
+        float spread = hands.Count > 1 ? splitCardOffset : cardSpacing;
+        return PlayerSlot(handIndex, 0) + Vector3.right * spread * (cardCount - 1) / 2f;
+    }
+
+    // Just above the table surface, so nothing flickers into the cloth
+    private Vector3 OnTable(Vector3 point)
+    {
+        point.y = playerRowStart.position.y + 0.02f;
+        return point;
+    }
+
+    private void CreateTableNumbers()
+    {
+        dealerTotal = CreateTableText("DealerTotal");
+        dealerTotal.alignment = TextAlignmentOptions.Right;
+        dealerTotal.rectTransform.pivot = new Vector2(1f, 0.5f);   // Its right edge sits next to the dealer's cards
+
+        for (int i = 0; i < maxHands; i++)
+        {
+            handTotals.Add(CreateTableText($"HandTotal{i + 1}"));
+        }
+    }
+
+    // White text lying flat on the table, readable from the player's side
+    private TextMeshPro CreateTableText(string objectName)
+    {
+        GameObject textObject = new GameObject(objectName, typeof(RectTransform));
+        textObject.transform.SetParent(playerRowStart.parent, false);
+        textObject.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+
+        TextMeshPro text = textObject.AddComponent<TextMeshPro>();
+
+        if (dealerText != null)
+        {
+            text.font = dealerText.font;
         }
 
-        // Centered under the fan of cards of the active hand
-        int cardCount = ActiveHand.CardObjects.Count;
-        Vector3 center = PlayerSlot(activeIndex, 0) + Vector3.right * splitCardOffset * (cardCount - 1) / 2f;
-        center.y = playerRowStart.position.y - 0.03f;
-        activeHandMarker.position = center;
+        text.fontSize = totalFontSize;
+        text.fontStyle = FontStyles.Bold;
+        text.alignment = TextAlignmentOptions.Center;
+        text.textWrappingMode = TextWrappingModes.NoWrap;
+        text.rectTransform.sizeDelta = new Vector2(4f, 2f);
+        text.color = totalColor;
+        text.outlineWidth = 0.2f;
+        text.outlineColor = new Color32(0, 0, 0, 255);
+
+        textObject.SetActive(false);
+        return text;
+    }
+
+    // A flat arrow pointing away from the player (+Z), its tip at the object's position.
+    // It uses the old marker's glowing material.
+    private void CreateHandArrow()
+    {
+        float headLength = arrowLength * 0.5f;
+        float halfWidth = arrowWidth * 0.5f;
+        float halfShaft = arrowWidth * 0.2f;
+
+        Vector3[] points =
+        {
+            new Vector3(0f, 0f, 0f),                         // Tip
+            new Vector3(-halfWidth, 0f, -headLength),
+            new Vector3(halfWidth, 0f, -headLength),
+            new Vector3(-halfShaft, 0f, -headLength),        // Shaft
+            new Vector3(halfShaft, 0f, -headLength),
+            new Vector3(-halfShaft, 0f, -arrowLength),
+            new Vector3(halfShaft, 0f, -arrowLength)
+        };
+
+        // Both sides, so it shows whichever way the triangles face
+        int[] triangles =
+        {
+            0, 2, 1, 0, 1, 2,
+            3, 4, 6, 3, 6, 4,
+            3, 6, 5, 3, 5, 6
+        };
+
+        Mesh mesh = new Mesh { name = "HandArrow" };
+        Vector3[] normals = new Vector3[points.Length];
+
+        for (int i = 0; i < normals.Length; i++)
+        {
+            normals[i] = Vector3.up;
+        }
+
+        mesh.vertices = points;
+        mesh.normals = normals;
+        mesh.triangles = triangles;
+        mesh.RecalculateBounds();
+
+        GameObject arrow = new GameObject("HandArrow");
+        arrow.transform.SetParent(playerRowStart.parent, false);
+        arrow.AddComponent<MeshFilter>().sharedMesh = mesh;
+
+        MeshRenderer arrowRenderer = arrow.AddComponent<MeshRenderer>();
+        arrowRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+        if (activeHandMarker != null)
+        {
+            Renderer markerRenderer = activeHandMarker.GetComponent<Renderer>();
+
+            if (markerRenderer != null)
+            {
+                arrowRenderer.sharedMaterial = markerRenderer.sharedMaterial;
+            }
+
+            activeHandMarker.gameObject.SetActive(false);
+        }
+
+        arrow.SetActive(false);
+        handArrow = arrow.transform;
     }
 }

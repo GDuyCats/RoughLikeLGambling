@@ -69,6 +69,7 @@ public class RunManager : MonoBehaviour
     public event Action RunStarted;
     public event Action StateChanged;
     public event Action RoundStarted;
+    public event Action BetPlaced;   // A play just started: its bet is on the table (the chip piles show it)
 
     private readonly List<Upgrade> ownedUpgrades = new List<Upgrade>();
 
@@ -82,6 +83,7 @@ public class RunManager : MonoBehaviour
     private int playsLeft;
     private int playsUsedThisRound;
     private int betLevel = 1;
+    private bool useBaseBet;   // See AtBaseBet()
     private bool isGameOver;
     private bool isVictory;
 
@@ -172,6 +174,7 @@ public class RunManager : MonoBehaviour
         if (bossCombat != null)
         {
             bossCombat.CancelAttack();
+            bossCombat.SetEnraged(false, null);
         }
 
         finalBoss = finalBossPool.Count > 0 ? finalBossPool[Random.Range(0, finalBossPool.Count)] : null;
@@ -230,12 +233,26 @@ public class RunManager : MonoBehaviour
 
     public void SetMinigameBusy(bool busy)
     {
+        bool starting = busy && !IsMinigameBusy;
         IsMinigameBusy = busy;
+
+        if (starting)
+        {
+            BetPlaced?.Invoke();
+        }
+
         UpdateUI();
     }
 
     // A play with one result: positive = chips won, negative = chips lost
     public void FinishPlay(int chipChange, string message)
+    {
+        FinishPlay(chipChange, chipChange, message);
+    }
+
+    // Same, with the boss damage worked out separately (always at bet x1, see AtBaseBet).
+    // damage: positive = the boss gets hurt, negative = the boss attacks for that much.
+    public void FinishPlay(int chipChange, int damage, string message)
     {
         if (!CanPlay)
         {
@@ -244,7 +261,7 @@ public class RunManager : MonoBehaviour
 
         if (IsBossFight)
         {
-            HandleBossPlay(Mathf.Max(0, chipChange), Mathf.Max(0, -chipChange), message);
+            HandleBossPlay(chipChange, Mathf.Max(0, damage), Mathf.Max(0, -damage), message);
             return;
         }
 
@@ -279,6 +296,12 @@ public class RunManager : MonoBehaviour
     // then losses make the boss attack.
     public void FinishMixedPlay(int chipsWon, int chipsLost, string message)
     {
+        FinishMixedPlay(chipsWon, chipsLost, chipsWon, chipsLost, message);
+    }
+
+    // Same, with the boss damage worked out separately (always at bet x1, see AtBaseBet)
+    public void FinishMixedPlay(int chipsWon, int chipsLost, int damageDealt, int damageTaken, string message)
+    {
         if (!CanPlay)
         {
             return;
@@ -286,16 +309,20 @@ public class RunManager : MonoBehaviour
 
         if (IsBossFight)
         {
-            HandleBossPlay(chipsWon, chipsLost, message);
+            HandleBossPlay(chipsWon - chipsLost, damageDealt, damageTaken, message);
             return;
         }
 
         FinishPlay(chipsWon - chipsLost, message);
     }
 
-    private void HandleBossPlay(int chipsWon, int chipsLost, string message)
+    // The boss fight plays for chips like any round, and on top of that wins hurt the boss and losses make it attack.
+    // The damage always uses bet x1, so a higher bet level only changes the chips.
+    private void HandleBossPlay(int chipChange, int chipsWon, int chipsLost, string message)
     {
         playsUsedThisRound++;
+
+        chips += chipChange;
 
         // Overtime: the longer the fight, the more damage both sides deal
         float overtime = OvertimeMultiplier;
@@ -331,6 +358,18 @@ public class RunManager : MonoBehaviour
                 UpdateUI();
                 return;
             }
+
+            message += CheckBossRage();
+        }
+
+        // Out of chips: the run is over, like in any other round
+        if (chips <= 0)
+        {
+            chips = 0;
+            messageText.text = message + "\nOut of chips!";
+            GameOver();
+            UpdateUI();
+            return;
         }
 
         // Then losses make the boss attack
@@ -381,7 +420,7 @@ public class RunManager : MonoBehaviour
 
         playerHealth = Mathf.Clamp(playerHealth - outcome.DamageTaken + outcome.HealAmount, 0, MaxHealth);
         bossHealth = Mathf.Max(0, bossHealth - outcome.BossDamage);
-        messageText.text = outcome.Message;
+        messageText.text = outcome.Message + (bossHealth > 0 ? CheckBossRage() : "");
         // Bigger hits shake the screen harder
         if (outcome.DamageTaken > 0 && hitShake != null)
         {
@@ -389,6 +428,18 @@ public class RunManager : MonoBehaviour
         }
         CheckBossFightEnd();
         UpdateUI();
+    }
+
+    // Below its rage line (half health by default) the boss gets furious, once per fight
+    private string CheckBossRage()
+    {
+        if (bossCombat == null || bossCombat.IsEnraged || bossHealth > finalBoss.MaxHealth * finalBoss.RageAtHealth)
+        {
+            return "";
+        }
+
+        bossCombat.SetEnraged(true, finalBoss.RageLine);
+        return $"\n<color=#FF6B6B>{finalBoss.DisplayName} is furious! Faster, longer attacks from now on.</color>";
     }
 
     private void CheckBossFightEnd()
@@ -416,7 +467,23 @@ public class RunManager : MonoBehaviour
 
     public int GetCurrentBet()
     {
-        return GetBetForLevel(betLevel);
+        return GetBetForLevel(useBaseBet ? 1 : betLevel);
+    }
+
+    // Works something out as if the bet level were x1. The minigames use this for boss damage,
+    // so a higher bet level only changes the chips: damage = AtBaseBet(() => GetWinAmount(...)).
+    public int AtBaseBet(System.Func<int> calculate)
+    {
+        useBaseBet = true;
+
+        try
+        {
+            return calculate();
+        }
+        finally
+        {
+            useBaseBet = false;
+        }
     }
 
     private int GetBetForLevel(int level)
@@ -507,6 +574,11 @@ public class RunManager : MonoBehaviour
         {
             bossHealth = finalBoss.MaxHealth;
             shieldsLeft = GetUpgradeTotal(UpgradeType.BossShield);
+
+            if (bossCombat != null)
+            {
+                bossCombat.SetEnraged(false, null);
+            }
         }
         else
         {
@@ -887,6 +959,13 @@ public class RunManager : MonoBehaviour
             text += "\nBlackjack: 21 after a split pays as blackjack";
         }
 
+        int insuranceBonus = GetUpgradeTotal(UpgradeType.InsurancePayout);
+
+        if (insuranceBonus > 0)
+        {
+            text += $"\nBlackjack: insurance pays {2 + insuranceBonus} to 1";
+        }
+
         text += BuildCombatStatsText();
 
         if (IsBossFight)
@@ -955,7 +1034,7 @@ public class RunManager : MonoBehaviour
                 : $"Overtime starts on play {overtimeStartPlay}";
 
             bossText.text = $"<color=#FFD54F>FINAL BOSS: {finalBoss.DisplayName}</color>   HP {bossHealth}/{finalBoss.MaxHealth}\n"
-                + $"<size=80%>Wins deal damage. Losses hurt you instead of costing chips.\n{overtimeLine}</size>";
+                + $"<size=80%>Wins hurt the boss, losses make it attack. Damage ignores your bet level.\n{overtimeLine}</size>";
         }
         else if (IsFinalRound)
         {

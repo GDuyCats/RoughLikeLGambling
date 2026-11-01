@@ -44,7 +44,21 @@ public class FinalBoss : ScriptableObject
     [SerializeField] private float chipMaxGap = 0.6f;
     [SerializeField] private float minWindup = 0.6f;      // How long a hand hovers before slamming
     [SerializeField] private float maxWindup = 1.1f;
+    [SerializeField] private float handDropTime = 0;      // How fast a hand slams down. 0 = the BossCombat's normal speed
     [SerializeField, Range(0f, 1f)] private float parryChance = 0.25f;   // Chance to parry the player's reflected chips and counters
+
+    [Header("Attack Chains")]
+    [SerializeField] private int minChainMoves = 1;       // Each attack is a string of random moves, this many
+    [SerializeField] private int maxChainMoves = 2;
+    [SerializeField] private float chainMinGap = 0.15f;   // Pause between two moves of a chain
+    [SerializeField] private float chainMaxGap = 0.5f;
+    [SerializeField, Range(0f, 1f)] private float overlapChance = 0.2f;   // A chip volley may start while a hand is still winding up
+
+    [Header("Rage (low health)")]
+    [SerializeField, Range(0f, 1f)] private float rageAtHealth = 0.5f;    // Below this share of health the boss gets furious
+    [SerializeField] private int rageExtraMoves = 1;
+    [SerializeField, Range(0.3f, 1f)] private float rageWindupScale = 0.8f;   // Wind-ups get this much shorter
+    [SerializeField] private string rageLine = "Enough games!";
 
     public string DisplayName => displayName;
     public string Description => description;
@@ -58,6 +72,16 @@ public class FinalBoss : ScriptableObject
     public float MinWindup => minWindup;
     public float MaxWindup => maxWindup;
     public float ParryChance => parryChance;
+    public float HandDropTime => handDropTime;
+    public int MinChainMoves => Mathf.Max(1, minChainMoves);
+    public int MaxChainMoves => Mathf.Max(MinChainMoves, maxChainMoves);
+    public float ChainMinGap => chainMinGap;
+    public float ChainMaxGap => chainMaxGap;
+    public float OverlapChance => overlapChance;
+    public float RageAtHealth => rageAtHealth;
+    public int RageExtraMoves => rageExtraMoves;
+    public float RageWindupScale => rageWindupScale;
+    public string RageLine => rageLine;
 
     // Pick an attack at random, using the weights like raffle tickets
     public BossAttackType PickAttack()

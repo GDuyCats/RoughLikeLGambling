@@ -116,6 +116,7 @@ public class HighLowGame : MonoBehaviour
         int nextCard = DrawCard();
         bool isTie = nextCard == currentCard;
         int chipChange;
+        int damage;   // Boss fight: always worked out at bet x1
         string message;
 
         if (guess == GuessType.Tie)
@@ -123,17 +124,20 @@ public class HighLowGame : MonoBehaviour
             if (isTie)
             {
                 chipChange = GetWinAmount(guess) + run.GetUpgradeTotal(UpgradeType.TieReward);
+                damage = run.AtBaseBet(() => GetWinAmount(guess)) + run.GetUpgradeTotal(UpgradeType.TieReward);
                 message = $"TIE! +{chipChange} chips";
             }
             else
             {
                 chipChange = -GetLossAmount();
+                damage = -run.AtBaseBet(GetLossAmount);
                 message = $"Not a tie! {chipChange} chips";
             }
         }
         else if (isTie)
         {
             chipChange = run.GetUpgradeTotal(UpgradeType.TieReward);
+            damage = chipChange;
             message = chipChange > 0 ? $"Same card! +{chipChange} chips" : "Same card! No chips won or lost.";
         }
         else
@@ -144,11 +148,13 @@ public class HighLowGame : MonoBehaviour
             if (isCorrect)
             {
                 chipChange = GetWinAmount(guess);
+                damage = run.AtBaseBet(() => GetWinAmount(guess));
                 message = $"Correct! +{chipChange} chips";
             }
             else
             {
                 chipChange = -GetLossAmount();
+                damage = -run.AtBaseBet(GetLossAmount);
                 message = $"Wrong! {chipChange} chips";
             }
         }
@@ -189,7 +195,7 @@ public class HighLowGame : MonoBehaviour
 
         isAnimating = false;
         run.SetMinigameBusy(false);
-        run.FinishPlay(chipChange, message);
+        run.FinishPlay(chipChange, damage, message);
     }
 
     // A new face-down card appears on the deck
@@ -324,16 +330,23 @@ public class HighLowGame : MonoBehaviour
         };
     }
 
+    // "HIGHER +31 chips". In the boss fight the damage (always at bet x1) is shown too.
     private string GuessButtonLabel(string label, GuessType guess)
     {
         int winAmount = GetWinAmount(guess);
-        return winAmount > 0 ? $"{label}\n+{winAmount} {RewardWord()}" : $"{label}\n-";
-    }
 
-    // What a win gives: chips in a normal round, damage to the boss in the boss fight
-    private string RewardWord()
-    {
-        return run.IsBossFight ? "damage" : "chips";
+        if (winAmount <= 0)
+        {
+            return $"{label}\n-";
+        }
+
+        if (run.IsBossFight)
+        {
+            int damage = run.AtBaseBet(() => GetWinAmount(guess));
+            return $"{label}\n+{winAmount} chips\n{damage} damage";
+        }
+
+        return $"{label}\n+{winAmount} chips";
     }
 
     private void RefreshUI()

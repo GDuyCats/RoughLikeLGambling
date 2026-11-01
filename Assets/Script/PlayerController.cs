@@ -29,6 +29,10 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float pressHopHeight = 1.2f;
     [SerializeField] private float pressHopTime = 0.3f;
 
+    [Header("Finding a Way Around")]
+    [SerializeField] private float pathCellSize = 0.5f;        // The table is split into squares this big to look for a way around things
+    [SerializeField] private float stuckTime = 0.4f;           // Barely moving this long while walking to a click: look for a new way
+
     [Header("Jump and Smash")]
     [SerializeField] private float jumpSpeed = 9f;
     [SerializeField] private float extraGravity = 15f;         // Added to normal gravity so jumps feel snappy, not floaty
@@ -70,6 +74,11 @@ public class PlayerController : MonoBehaviour
     private bool isSquashed;          // Flattened right now (a bigger reaction than being dizzy)
     private float stunImmuneUntil;    // Bumps before this time shove the chibi but don't stun it again
     private AudioSource voiceSource;  // The chibi's own speaker, so its dizzy sound never overlaps and can be stopped
+
+    private readonly List<Vector3> path = new List<Vector3>();     // Corners to walk through on the way to the click
+    private readonly Collider[] overlapBuffer = new Collider[24];
+    private float lastProgressTime;
+    private Vector3 lastProgressPosition;
 
     private bool spacePressed;        // Read in Update, used in FixedUpdate
     private bool isGrounded;
@@ -211,10 +220,12 @@ public class PlayerController : MonoBehaviour
             else if (toTarget.magnitude <= stopDistance)
             {
                 clickTarget = null;
+                path.Clear();
             }
             else
             {
-                direction = toTarget.normalized;
+                direction = DirectionAlongPath();
+                CheckIfStuck();
             }
         }
 
@@ -253,6 +264,333 @@ public class PlayerController : MonoBehaviour
             pressTarget = null;
             clickTarget = groundPoint;
         }
+
+        BuildPath();
+    }
+
+    // ---------- Finding a way around ----------
+
+    // If something stands between the chibi and the click (a button, a die, the chip pile),
+    // look for a way around it on a grid of small squares (A* search), then cut the corners.
+    private void BuildPath()
+    {
+        path.Clear();
+        lastProgressTime = Time.time;
+        lastProgressPosition = body.position;
+
+        if (!clickTarget.HasValue || IsWayClear(body.position, clickTarget.Value))
+        {
+            return;
+        }
+
+        List<Vector3> found = FindPath(body.position, clickTarget.Value);
+
+        if (found != null)
+        {
+            path.AddRange(found);
+        }
+    }
+
+    // Walk toward the next corner of the path, or straight at the target when there is no path
+    private Vector3 DirectionAlongPath()
+    {
+        while (path.Count > 0 && Flat(path[0] - body.position).magnitude < pathCellSize * 0.6f)
+        {
+            path.RemoveAt(0);
+        }
+
+        Vector3 aim = path.Count > 0 ? path[0] : clickTarget.Value;
+        return Flat(aim - body.position).normalized;
+    }
+
+    // Pushed against something and not getting anywhere: look for a new way
+    private void CheckIfStuck()
+    {
+        if (Flat(body.position - lastProgressPosition).magnitude > 0.3f)
+        {
+            lastProgressTime = Time.time;
+            lastProgressPosition = body.position;
+        }
+        else if (Time.time - lastProgressTime > stuckTime && isGrounded && knockbackVelocity.sqrMagnitude < 0.01f)
+        {
+            BuildPath();
+        }
+    }
+
+    private List<Vector3> FindPath(Vector3 start, Vector3 goal)
+    {
+        int width = Mathf.CeilToInt((areaMax.x - areaMin.x) / pathCellSize) + 1;
+        int depth = Mathf.CeilToInt((areaMax.y - areaMin.y) / pathCellSize) + 1;
+
+        if (width <= 0 || depth <= 0 || width * depth > 20000)
+        {
+            return null;
+        }
+
+        int cellCount = width * depth;
+        int startCell = ToCell(start, width, depth);
+        int goalCell = ToCell(goal, width, depth);
+        bool goalBlocked = IsBlockedAt(CellCenter(goalCell, width));
+
+        // 0 = not checked yet, 1 = free, 2 = blocked
+        byte[] state = new byte[cellCount];
+        float[] cost = new float[cellCount];
+        int[] cameFrom = new int[cellCount];
+        bool[] closed = new bool[cellCount];
+        List<int> open = new List<int> { startCell };
+
+        for (int i = 0; i < cellCount; i++)
+        {
+            cost[i] = float.MaxValue;
+            cameFrom[i] = -1;
+        }
+
+        cost[startCell] = 0f;
+        state[startCell] = 1;
+        int reached = -1;
+
+        while (open.Count > 0)
+        {
+            // The open square that looks closest to the goal (fine for a few thousand squares)
+            int best = 0;
+            float bestScore = float.MaxValue;
+
+            for (int i = 0; i < open.Count; i++)
+            {
+                float score = cost[open[i]] + Vector3.Distance(CellCenter(open[i], width), goal);
+
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    best = i;
+                }
+            }
+
+            int current = open[best];
+            open.RemoveAt(best);
+
+            if (closed[current])
+            {
+                continue;
+            }
+
+            closed[current] = true;
+            Vector3 currentCenter = CellCenter(current, width);
+
+            if (IsGoal(current, currentCenter, goalCell, goal, goalBlocked))
+            {
+                reached = current;
+                break;
+            }
+
+            int cx = current % width;
+            int cz = current / width;
+
+            for (int dz = -1; dz <= 1; dz++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dz == 0)
+                    {
+                        continue;
+                    }
+
+                    int nx = cx + dx;
+                    int nz = cz + dz;
+
+                    if (nx < 0 || nz < 0 || nx >= width || nz >= depth)
+                    {
+                        continue;
+                    }
+
+                    int next = nz * width + nx;
+
+                    if (closed[next] || IsBlocked(next, width, state))
+                    {
+                        continue;
+                    }
+
+                    // No cutting corners past an obstacle
+                    if (dx != 0 && dz != 0 && (IsBlocked(cz * width + nx, width, state) || IsBlocked(nz * width + cx, width, state)))
+                    {
+                        continue;
+                    }
+
+                    float step = (dx != 0 && dz != 0) ? 1.414f : 1f;
+                    float newCost = cost[current] + step * pathCellSize;
+
+                    if (newCost < cost[next])
+                    {
+                        cost[next] = newCost;
+                        cameFrom[next] = current;
+                        open.Add(next);
+                    }
+                }
+            }
+        }
+
+        if (reached < 0)
+        {
+            return null;
+        }
+
+        // From the goal back to the start, then the right way round
+        List<Vector3> corners = new List<Vector3>();
+
+        for (int cell = reached; cell >= 0 && cell != startCell; cell = cameFrom[cell])
+        {
+            corners.Add(CellCenter(cell, width));
+        }
+
+        corners.Reverse();
+
+        if (!goalBlocked && pressTarget == null)
+        {
+            corners.Add(goal);
+        }
+
+        return CutCorners(start, corners);
+    }
+
+    private bool IsGoal(int cell, Vector3 center, int goalCell, Vector3 goal, bool goalBlocked)
+    {
+        if (pressTarget != null)
+        {
+            return Flat(center - goal).magnitude <= pressStartDistance * 0.9f;
+        }
+
+        return cell == goalCell || (goalBlocked && Flat(center - goal).magnitude <= pathCellSize * 2f);
+    }
+
+    // Keep only the corners where the straight way is blocked
+    private List<Vector3> CutCorners(Vector3 start, List<Vector3> corners)
+    {
+        List<Vector3> result = new List<Vector3>();
+        Vector3 from = start;
+        int index = 0;
+
+        while (index < corners.Count)
+        {
+            int farthest = index;
+
+            for (int i = corners.Count - 1; i > index; i--)
+            {
+                if (IsWayClear(from, corners[i]))
+                {
+                    farthest = i;
+                    break;
+                }
+            }
+
+            result.Add(corners[farthest]);
+            from = corners[farthest];
+            index = farthest + 1;
+        }
+
+        return result;
+    }
+
+    private bool IsBlocked(int cell, int width, byte[] state)
+    {
+        if (state[cell] == 0)
+        {
+            state[cell] = IsBlockedAt(CellCenter(cell, width)) ? (byte)2 : (byte)1;
+        }
+
+        return state[cell] == 2;
+    }
+
+    // Would the chibi bump into something standing here?
+    private bool IsBlockedAt(Vector3 point)
+    {
+        float radius = ownCollider.bounds.extents.x + 0.05f;
+        Vector3 center = new Vector3(point.x, body.position.y + halfHeight * 0.15f, point.z);
+        Vector3 halfSize = new Vector3(radius, halfHeight * 0.7f, radius);
+
+        int count = Physics.OverlapBoxNonAlloc(center, halfSize, overlapBuffer, Quaternion.identity,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+
+        for (int i = 0; i < count; i++)
+        {
+            if (IsObstacle(overlapBuffer[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Can the chibi walk in a straight line from a to b without bumping into anything?
+    private bool IsWayClear(Vector3 a, Vector3 b)
+    {
+        Vector3 from = new Vector3(a.x, body.position.y, a.z);
+        Vector3 to = new Vector3(b.x, body.position.y, b.z);
+        Vector3 offset = to - from;
+        float distance = offset.magnitude;
+
+        if (distance < 0.01f)
+        {
+            return true;
+        }
+
+        float radius = ownCollider.bounds.extents.x * 0.9f;
+
+        foreach (RaycastHit hit in Physics.SphereCastAll(from, radius, offset / distance, distance,
+                     Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        {
+            // Already touching at the start (distance 0) doesn't count: the chibi can walk away from it
+            if (hit.distance > 0f && IsObstacle(hit.collider))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Things to walk around: everything solid except the chibi itself, the button it is going to press,
+    // and loose chips lying on the table (they get pushed aside)
+    private bool IsObstacle(Collider other)
+    {
+        if (other == ownCollider || other.transform.IsChildOf(transform))
+        {
+            return false;
+        }
+
+        if (pressTarget != null && other.GetComponentInParent<TableButton>() == pressTarget)
+        {
+            return false;
+        }
+
+        TableChip chip = other.GetComponentInParent<TableChip>();
+
+        if (chip != null && (other.attachedRigidbody == null || !other.attachedRigidbody.isKinematic))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private int ToCell(Vector3 point, int width, int depth)
+    {
+        int x = Mathf.Clamp(Mathf.RoundToInt((point.x - areaMin.x) / pathCellSize), 0, width - 1);
+        int z = Mathf.Clamp(Mathf.RoundToInt((point.z - areaMin.y) / pathCellSize), 0, depth - 1);
+        return z * width + x;
+    }
+
+    private Vector3 CellCenter(int cell, int width)
+    {
+        int x = cell % width;
+        int z = cell / width;
+        return new Vector3(areaMin.x + x * pathCellSize, body.position.y, areaMin.y + z * pathCellSize);
+    }
+
+    private static Vector3 Flat(Vector3 vector)
+    {
+        vector.y = 0f;
+        return vector;
     }
 
     // Hop up onto the top of the button, and press it when landing.

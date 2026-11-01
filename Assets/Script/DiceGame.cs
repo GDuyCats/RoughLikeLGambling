@@ -164,16 +164,19 @@ public class DiceGame : MonoBehaviour
         int total = first + second;
 
         int chipChange;
+        int damage;   // Boss fight: always worked out at bet x1
         string message;
 
         if (IsWinningTotal(guess, total))
         {
             chipChange = GetWinAmount(guess);
+            damage = run.AtBaseBet(() => GetWinAmount(guess));
             message = $"Rolled {first} + {second} = {total}! +{chipChange} chips";
         }
         else
         {
             chipChange = -GetLossAmount();
+            damage = -run.AtBaseBet(GetLossAmount);
             message = $"Rolled {first} + {second} = {total}! {chipChange} chips";
         }
 
@@ -187,7 +190,7 @@ public class DiceGame : MonoBehaviour
 
         isRolling = false;
         run.SetMinigameBusy(false);
-        run.FinishPlay(chipChange, message);
+        run.FinishPlay(chipChange, damage, message);
     }
 
     // Throw a die from the dealer's side toward the aim spot, with a little random aim and spin
@@ -348,17 +351,26 @@ public class DiceGame : MonoBehaviour
             return;
         }
 
-        underButtonText.text = $"UNDER {TargetTotal}\n+{GetWinAmount(GuessType.Under)} {RewardWord()}";
-        sevenButtonText.text = $"SEVEN\n+{GetWinAmount(GuessType.Seven)} {RewardWord()}";
-        overButtonText.text = $"OVER {TargetTotal}\n+{GetWinAmount(GuessType.Over)} {RewardWord()}";
+        underButtonText.text = GuessButtonLabel($"UNDER {TargetTotal}", GuessType.Under);
+        sevenButtonText.text = GuessButtonLabel("SEVEN", GuessType.Seven);
+        overButtonText.text = GuessButtonLabel($"OVER {TargetTotal}", GuessType.Over);
 
         underButton.interactable = run.CanPlay;
         sevenButton.interactable = run.CanPlay;
         overButton.interactable = run.CanPlay;
     }
-    // What a win gives: chips in a normal round, damage to the boss in the boss fight
-    private string RewardWord()
+
+    // "SEVEN +63 chips". In the boss fight the damage (always at bet x1) is shown too.
+    private string GuessButtonLabel(string label, GuessType guess)
     {
-        return run.IsBossFight ? "damage" : "chips";
+        int winAmount = GetWinAmount(guess);
+
+        if (run.IsBossFight)
+        {
+            int damage = run.AtBaseBet(() => GetWinAmount(guess));
+            return $"{label}\n+{winAmount} chips\n{damage} damage";
+        }
+
+        return $"{label}\n+{winAmount} chips";
     }
 }

@@ -19,7 +19,8 @@ public enum UpgradeType
     ParryRewardPercent,   // Extra percent on perfect parry rewards
     PerfectWindowMs,      // Extra milliseconds for the perfect parry window
     DoubleAfterSplit,     // No longer used: doubling after a split is now always allowed. Kept so the numbers don't shift.
-    BlackjackAfterSplit   // Blackjack: two cards making 21 after a split pay as a blackjack
+    BlackjackAfterSplit,  // Blackjack: two cards making 21 after a split pay as a blackjack
+    InsurancePayout       // Blackjack: insurance pays this much more (value 1: 3 to 1 instead of 2 to 1)
 }
 
 // How rare an upgrade is. Rarer upgrades appear less often.
