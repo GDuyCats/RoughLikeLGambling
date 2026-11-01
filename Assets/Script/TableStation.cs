@@ -11,12 +11,14 @@ public class TableStation : MonoBehaviour
     [SerializeField] private Transform bossSpot;
     [SerializeField] private TableArena arena;         // Leave empty for a table played from the casino floor
     [SerializeField] private GameObject bossCamera;    // Low camera that shows the giant dealer during the boss fight
+    [SerializeField] private TableDealer dealer;       // The giant dealer sitting at this table (also one of the bosses)
     private Collider tableCollider;
 
     public string DisplayName => displayName;
     public MinigameType Minigame => minigame;
     public Transform BossSpot => bossSpot;
     public TableArena Arena => arena;
+    public TableDealer Dealer => dealer;
 
     private void Awake()
     {

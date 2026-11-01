@@ -169,6 +169,28 @@ public class BossCombat : MonoBehaviour
         HideVisuals();
     }
 
+    // The final boss fights with the body of the dealer sitting at its table
+    public void UseDealer(TableDealer dealer)
+    {
+        if (dealer == null)
+        {
+            Debug.LogError("BossCombat: the boss table has no dealer. Run Tools > Build Table Dealers, or fill the Dealer field of the TableStation.");
+            return;
+        }
+
+        CancelAttack();
+
+        bossModel = dealer.transform;
+        head = dealer.Head;
+        leftHand = dealer.LeftHand;
+        rightHand = dealer.RightHand;
+        bossRenderer = dealer.HeadRenderer;
+
+        leftRestLocal = leftHand.localPosition;
+        rightRestLocal = rightHand.localPosition;
+        bossOriginalColor = bossRenderer != null ? bossRenderer.material.color : Color.white;
+    }
+
     public void StartAttack(int damage, FinalBoss boss, bool canPerfectParry, bool canBlock, float perfectWindowBonus, int rewardBonusPercent, Action<AttackOutcome> onFinished)
     {
         CancelAttack();

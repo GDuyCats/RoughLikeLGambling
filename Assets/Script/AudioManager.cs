@@ -37,7 +37,8 @@ public enum SoundId
     Block,
     PlayerHit,
     BossParry,
-    BossHurt
+    BossHurt,
+    DealerBonk   // A thrown chip bonks a dealer on the head
 }
 
 // Plays sound effects from anywhere with one line: AudioManager.Play(SoundId.CardFlip);

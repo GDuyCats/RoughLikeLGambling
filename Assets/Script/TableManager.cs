@@ -16,7 +16,8 @@ public class TableManager : MonoBehaviour
     [SerializeField] private TMP_Text gameTitleText;
     [SerializeField] private Button interactButton;
     [SerializeField] private Button leaveButton;
-    [SerializeField] private GameObject bossModel;
+    [SerializeField] private GameObject bossModel;      // The old single boss body, kept hidden now that every table has its own dealer
+    [SerializeField] private BossCombat bossCombat;     // Fights using the boss table's dealer
     [SerializeField] private float interactRange = 1.5f;
     [SerializeField] private int switchCostAfterPlaying = 1;
 
@@ -272,6 +273,7 @@ public class TableManager : MonoBehaviour
     private void HandleRunStarted()
     {
         HideBoss();
+        UpdateDealers();
 
         if (currentTable != null)
         {
@@ -285,6 +287,8 @@ public class TableManager : MonoBehaviour
 
     private void HandleRoundStarted()
     {
+        UpdateDealers();
+
         if (run.IsBossFight)
         {
             TableStation bossTable = BossTable;
@@ -312,7 +316,11 @@ public class TableManager : MonoBehaviour
                 bossTable.SetBossView(true);
             }
 
-            PlaceBoss(bossTable);
+            // The boss fights with the body of the dealer at its own table
+            if (bossCombat != null)
+            {
+                bossCombat.UseDealer(bossTable.Dealer);
+            }
 
             run.ShowMessage(currentTable == bossTable
                 ? $"The final boss {run.FinalBoss.DisplayName} has arrived! Fight!"
@@ -328,28 +336,21 @@ public class TableManager : MonoBehaviour
         }
     }
 
-    private void PlaceBoss(TableStation table)
+    // The dealer who is this run's boss gets red eyes once the boss is revealed
+    private void UpdateDealers()
     {
-        if (bossModel == null)
+        foreach (TableStation table in tables)
         {
-            Debug.LogError("Boss Model is not assigned on TableManager.");
-            return;
-        }
+            TableDealer dealer = table.Dealer;
 
-        if (table == null)
-        {
-            Debug.LogError("No boss table found. Check the Minigame field on each TableStation.");
-            return;
-        }
+            if (dealer == null)
+            {
+                continue;
+            }
 
-        if (table.BossSpot == null)
-        {
-            Debug.LogError($"{table.name} has no Boss Spot assigned in its TableStation.");
-            return;
+            bool isThisRunsBoss = run.FinalBoss != null && dealer.Boss == run.FinalBoss;
+            dealer.SetMarked(isThisRunsBoss && run.IsBossRevealed);
         }
-
-        bossModel.transform.position = table.BossSpot.position;
-        bossModel.SetActive(true);
     }
 
     private void HideBoss()

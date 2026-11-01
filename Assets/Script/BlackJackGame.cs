@@ -914,10 +914,10 @@ public class BlackjackGame : MonoBehaviour
         surrenderButton.interactable = CanSurrender();
 
         int bet = run.GetCurrentBet();
-        dealButtonText.text = $"DEAL\nBet {bet}";
-        doubleButtonText.text = $"DOUBLE\n+{bet}";
-        splitButtonText.text = $"SPLIT\n+{bet}";
-        surrenderButtonText.text = $"SURRENDER\n-{Mathf.CeilToInt(Mathf.Max(0, bet - run.GetUpgradeTotal(UpgradeType.LossReduction)) / 2f)}";
+        dealButtonText.text = $"DEAL\nBet {bet} chips";
+        doubleButtonText.text = $"DOUBLE\nBet +{bet} chips";
+        splitButtonText.text = $"SPLIT\nBet +{bet} chips";
+        surrenderButtonText.text = $"SURRENDER\nLose {Mathf.CeilToInt(Mathf.Max(0, bet - run.GetUpgradeTotal(UpgradeType.LossReduction)) / 2f)} chips";
 
         UpdateActiveHandMarker();
     }

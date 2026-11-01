@@ -348,12 +348,17 @@ public class DiceGame : MonoBehaviour
             return;
         }
 
-        underButtonText.text = $"UNDER {TargetTotal}\n+{GetWinAmount(GuessType.Under)}";
-        sevenButtonText.text = $"SEVEN\n+{GetWinAmount(GuessType.Seven)}";
-        overButtonText.text = $"OVER {TargetTotal}\n+{GetWinAmount(GuessType.Over)}";
+        underButtonText.text = $"UNDER {TargetTotal}\n+{GetWinAmount(GuessType.Under)} {RewardWord()}";
+        sevenButtonText.text = $"SEVEN\n+{GetWinAmount(GuessType.Seven)} {RewardWord()}";
+        overButtonText.text = $"OVER {TargetTotal}\n+{GetWinAmount(GuessType.Over)} {RewardWord()}";
 
         underButton.interactable = run.CanPlay;
         sevenButton.interactable = run.CanPlay;
         overButton.interactable = run.CanPlay;
+    }
+    // What a win gives: chips in a normal round, damage to the boss in the boss fight
+    private string RewardWord()
+    {
+        return run.IsBossFight ? "damage" : "chips";
     }
 }

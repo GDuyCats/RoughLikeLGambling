@@ -33,6 +33,7 @@ public class HighLowGame : MonoBehaviour
 
     [Header("Rules")]
     [SerializeField] private float payoutMultiplier = 1.2f;
+    [SerializeField] private float tieBetMultiplier = 5f;   // A correct TIE pays this many times the bet (it is a 1 in 13 shot)
     [SerializeField] private int baseWinBonus = 3;
 
     [Header("Animation")]
@@ -261,7 +262,10 @@ public class HighLowGame : MonoBehaviour
         }
 
         int losingCards = CountLosingCards(guess);
-        float payout = run.GetCurrentBet() * payoutMultiplier * losingCards / winningCards;
+        // TIE has its own, smaller payout: the odds formula would pay far too much for a 1 in 13 guess
+        float payout = guess == GuessType.Tie
+            ? run.GetCurrentBet() * tieBetMultiplier
+            : run.GetCurrentBet() * payoutMultiplier * losingCards / winningCards;
         int baseWin = Mathf.Max(1, Mathf.RoundToInt(payout) + baseWinBonus);
 
         int percentBonus = run.GetUpgradeTotal(UpgradeType.WinPayoutPercent);
@@ -323,7 +327,13 @@ public class HighLowGame : MonoBehaviour
     private string GuessButtonLabel(string label, GuessType guess)
     {
         int winAmount = GetWinAmount(guess);
-        return winAmount > 0 ? $"{label}\n+{winAmount}" : $"{label}\n-";
+        return winAmount > 0 ? $"{label}\n+{winAmount} {RewardWord()}" : $"{label}\n-";
+    }
+
+    // What a win gives: chips in a normal round, damage to the boss in the boss fight
+    private string RewardWord()
+    {
+        return run.IsBossFight ? "damage" : "chips";
     }
 
     private void RefreshUI()

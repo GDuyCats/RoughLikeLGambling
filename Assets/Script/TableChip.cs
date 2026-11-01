@@ -156,6 +156,15 @@ public class TableChip : MonoBehaviour
             return;
         }
 
+        // A dealer hit on the head flinches and grumbles (just for fun, it changes nothing)
+        TableDealer dealer = collision.collider.GetComponentInParent<TableDealer>();
+
+        if (dealer != null)
+        {
+            dealer.OnChipHit();
+            return;
+        }
+
         TableButton button = collision.collider.GetComponentInParent<TableButton>();
 
         if (button != null)
