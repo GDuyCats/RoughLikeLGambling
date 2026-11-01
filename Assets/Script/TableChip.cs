@@ -12,6 +12,7 @@ public class TableChip : MonoBehaviour
     [SerializeField] private float fallLimit = -3f;         // This far below its starting height, the chip fell off the table
     [SerializeField] private float pickupDelay = 0.6f;      // After a throw, the chip can't be caught again for this long
     [SerializeField] private float maxPickupSpeed = 3f;     // A chip still flying or rolling faster than this can't be picked up
+    [SerializeField] private float minDealerHitSpeed = 2f;  // A chip must hit a dealer at least this fast to bother them
     [SerializeField] private float minClinkSpeed = 0.8f;    // Slower bumps than this make no sound
     [SerializeField] private float loudClinkSpeed = 8f;     // Bumps this fast (or faster) play at full volume
 
@@ -39,6 +40,19 @@ public class TableChip : MonoBehaviour
         normalInterpolation = body.interpolation;
         homePosition = transform.position;
         homeRotation = transform.rotation;
+
+        // The rails' tall invisible walls are only there to keep the dice in.
+        // Thrown chips fly over them (to reach the dealer behind the table).
+        // The rails sit on the "Ignore Raycast" layer.
+        int railLayer = LayerMask.NameToLayer("Ignore Raycast");
+
+        foreach (Collider other in FindObjectsByType<Collider>(FindObjectsSortMode.None))
+        {
+            if (other != chipCollider && other.gameObject.layer == railLayer)
+            {
+                Physics.IgnoreCollision(chipCollider, other, true);
+            }
+        }
 
         if (chipRenderer != null && colorChoices.Length > 0)
         {
@@ -143,6 +157,21 @@ public class TableChip : MonoBehaviour
             AudioManager.Play(SoundId.ChipHit, Mathf.Clamp01(impact / loudClinkSpeed));
         }
 
+        // A dealer hit on the head flinches and grumbles (just for fun, it changes nothing).
+        // This counts even if the chip grazed something on the way.
+        TableDealer dealer = collision.collider.GetComponentInParent<TableDealer>();
+
+        if (dealer != null)
+        {
+            if (impact > minDealerHitSpeed)
+            {
+                dealer.OnChipHit();
+            }
+
+            isThrown = false;
+            return;
+        }
+
         if (!isThrown)
         {
             return;
@@ -153,15 +182,6 @@ public class TableChip : MonoBehaviour
 
         if (collision.relativeVelocity.magnitude < pressImpactSpeed)
         {
-            return;
-        }
-
-        // A dealer hit on the head flinches and grumbles (just for fun, it changes nothing)
-        TableDealer dealer = collision.collider.GetComponentInParent<TableDealer>();
-
-        if (dealer != null)
-        {
-            dealer.OnChipHit();
             return;
         }
 

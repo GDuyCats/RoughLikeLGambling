@@ -52,6 +52,9 @@ public class GameMenu : MonoBehaviour
     [SerializeField] private Button backButton;
 
     private MenuState state;
+    // True while the pause menu is open. Other scripts (like ParryFreeze) leave time alone meanwhile.
+    public static bool IsPaused { get; private set; }
+
     private GameObject panelBeforeSettings;   // Where the Back button returns to
     private bool enableGameplayNextFrame;     // See Resume()
 
@@ -122,6 +125,7 @@ public class GameMenu : MonoBehaviour
     private void ShowMainMenu()
     {
         state = MenuState.MainMenu;
+        IsPaused = false;
         Time.timeScale = 1f;
         AudioListener.pause = false;
 
@@ -155,6 +159,7 @@ public class GameMenu : MonoBehaviour
     private void Pause()
     {
         state = MenuState.Paused;
+        IsPaused = true;
         Time.timeScale = 0f;          // Everything that moves stops: dice, cards, the dealer's hands
         AudioListener.pause = true;   // Sound effects pause; the music keeps playing
         SetGameplayInput(false);
@@ -166,7 +171,8 @@ public class GameMenu : MonoBehaviour
     private void Resume()
     {
         state = MenuState.Playing;
-        Time.timeScale = 1f;
+        IsPaused = false;
+        Time.timeScale = ParryFreeze.GameSpeed;   // 1 normally; still 0 if the pause came in the middle of a parry freeze
         AudioListener.pause = false;
 
         pausePanel.SetActive(false);
@@ -177,6 +183,7 @@ public class GameMenu : MonoBehaviour
     // The simplest clean reset: load the whole scene again. It starts on the main menu.
     private void BackToMainMenu()
     {
+        IsPaused = false;
         Time.timeScale = 1f;
         AudioListener.pause = false;
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);

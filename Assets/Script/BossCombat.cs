@@ -48,6 +48,7 @@ public class BossCombat : MonoBehaviour
         public bool Held;
         public bool InArea;             // Was the chibi inside the hit area when it landed?
         public bool WindupPlayed;       // The wind-up sound has played (slams and sweeps)
+        public bool FreezeShown;        // The perfect parry freeze has played for this hit
 
         public bool IsProjectile => Kind == HitKind.Chip;
     }
@@ -109,6 +110,7 @@ public class BossCombat : MonoBehaviour
     [SerializeField] private float ringStartScale = 3f;
     [SerializeField] private bool showTimingCue = true;
     [SerializeField] private bool showChipShadows = false;   // Shadows under flying chips. Off = read the chips by eye.
+    [SerializeField] private bool showSlamShadows = false;   // Shadows under slams and sweeps. Off = watch the hands.
 
     [Header("Block")]
     [SerializeField, Range(0f, 1f)] private float projectileBlockReduction = 0.75f;
@@ -138,6 +140,8 @@ public class BossCombat : MonoBehaviour
     private readonly List<OutgoingShot> outgoing = new List<OutgoingShot>();
 
     private Rigidbody playerBody;
+    private TableDealer currentDealer;   // The dealer whose body is fighting (for its lines)
+    private bool chibiMayTalk;           // The chibi shouts a line on its first parry of an attack, and again after each boss parry
     private Color bossOriginalColor;
     private Vector3 leftRestLocal;
     private Vector3 rightRestLocal;
@@ -154,6 +158,12 @@ public class BossCombat : MonoBehaviour
     private int bossParries;
 
     public bool IsAttacking { get; private set; }
+
+    // Shared with the dealers' playful slap, so it looks the same as a boss slam
+    public GameObject ShadowDiscPrefab => shadowDiscPrefab;
+    public Color ShadowColor => shadowColor;
+    public Color LockedShadowColor => lockedShadowColor;
+    public float PerfectWindow => perfectWindow;
 
     private void Awake()
     {
@@ -180,6 +190,7 @@ public class BossCombat : MonoBehaviour
 
         CancelAttack();
 
+        currentDealer = dealer;
         bossModel = dealer.transform;
         head = dealer.Head;
         leftHand = dealer.LeftHand;
@@ -226,6 +237,7 @@ public class BossCombat : MonoBehaviour
         float window = perfectWindow + perfectWindowBonus;
         float rewardScale = 1f + rewardBonusPercent / 100f;
         float lockoutUntil = 0f;
+        chibiMayTalk = true;
 
         BossAttackType attack = boss.PickAttack();
         QueueAttack(attack, damage, boss);
@@ -237,7 +249,7 @@ public class BossCombat : MonoBehaviour
 
             // A press counts as a perfect parry for a hit inside the window.
             // A press with no hit nearby is a whiff and locks parrying for a moment.
-            if (canPerfectParry && WasParryPressed() && now >= lockoutUntil)
+            if (canPerfectParry && !ParryFreeze.IsFrozen && WasParryPressed() && now >= lockoutUntil)
             {
                 IncomingHit hit = FindHitInWindow(now, window);
 
@@ -266,6 +278,15 @@ public class BossCombat : MonoBehaviour
                 if (!hit.Landed && now >= hit.ImpactTime)
                 {
                     Land(hit);
+                }
+
+                // A perfect parry of a hand: everything freezes at the moment of contact (SF6 style)
+                if (hit.Perfected && !hit.IsProjectile && !hit.FreezeShown && now >= hit.ImpactTime)
+                {
+                    hit.FreezeShown = true;
+                    Vector3 contact = hit.Hand != null ? Vector3.Lerp(hit.Hand.position, player.position, 0.5f) : player.position;
+                    ParryFreeze.PlayerParried(player, contact, chibiMayTalk);
+                    chibiMayTalk = false;
                 }
 
                 // Wait a moment after impact, so a slightly late press can still be perfect
@@ -599,6 +620,12 @@ public class BossCombat : MonoBehaviour
             Flash(bossParryColor);
             AudioManager.Play(SoundId.BossParry);
 
+            // The boss gets its own freeze, glowing red, and answers back
+            Vector3 contact = hit.Hand != null ? hit.Hand.position : head.position;
+            string line = currentDealer != null ? currentDealer.PickBossParryLine() : null;
+            ParryFreeze.BossParried(bossModel, head, contact, line);
+            chibiMayTalk = true;
+
             Transform otherHand = hit.Hand == leftHand ? rightHand : leftHand;
             QueueSlam(hit.Damage, Time.time, followUpWindup, hit.Rally + 1, otherHand, false);
             return;
@@ -772,8 +799,10 @@ public class BossCombat : MonoBehaviour
             return;
         }
 
-        // Chips can have no warning at all, for a harder fight
-        if (hit.IsProjectile && !showChipShadows)
+        // No warning shadows by default: the player has to read the chips and hands by eye
+        bool showShadow = hit.IsProjectile ? showChipShadows : showSlamShadows;
+
+        if (!showShadow)
         {
             hit.Shadow.SetActive(false);
             return;
