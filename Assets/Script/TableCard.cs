@@ -21,11 +21,32 @@ public class TableCard : MonoBehaviour
         face.sprite = sprite;
     }
 
+    // The card's size on the table (x = width, y = length), measured from its picture
+    public Vector2 Size
+    {
+        get
+        {
+            Bounds bounds = face.bounds;
+            return new Vector2(bounds.size.x, bounds.size.z);
+        }
+    }
+
     // Fly in an arc to the target position
     public IEnumerator MoveTo(Vector3 target)
     {
-        AudioManager.Play(SoundId.CardDeal);
+        return MoveTo(target, transform.rotation);
+    }
+
+    // Fly in an arc to the target position, turning to lie at this angle when it lands
+    public IEnumerator MoveTo(Vector3 target, Quaternion rotation, bool sound = true)
+    {
+        if (sound)
+        {
+            AudioManager.Play(SoundId.CardDeal);
+        }
+
         Vector3 start = transform.position;
+        Quaternion startRotation = transform.rotation;
 
         for (float t = 0f; t < moveTime; t += Time.deltaTime)
         {
@@ -35,6 +56,21 @@ public class TableCard : MonoBehaviour
             // Sin goes 0 → 1 → 0 across the flight, so the card lifts in the middle
             position.y += Mathf.Sin(progress * Mathf.PI) * arcHeight;
             transform.position = position;
+            transform.rotation = Quaternion.Slerp(startRotation, rotation, progress);
+            yield return null;
+        }
+
+        transform.SetPositionAndRotation(target, rotation);
+    }
+
+    // A short straight slide (a card pulled out of the shoe)
+    public IEnumerator SlideTo(Vector3 target, float duration)
+    {
+        Vector3 start = transform.position;
+
+        for (float t = 0f; t < duration; t += Time.deltaTime)
+        {
+            transform.position = Vector3.Lerp(start, target, Mathf.SmoothStep(0f, 1f, t / duration));
             yield return null;
         }
 
@@ -42,9 +78,13 @@ public class TableCard : MonoBehaviour
     }
 
     // Squash the card, swap the picture, stretch it back: looks like turning it over
-    public IEnumerator FlipTo(Sprite sprite)
+    public IEnumerator FlipTo(Sprite sprite, bool sound = true)
     {
-        AudioManager.Play(SoundId.CardFlip);
+        if (sound)
+        {
+            AudioManager.Play(SoundId.CardFlip);
+        }
+
         float halfTime = flipTime / 2f;
 
         for (float t = 0f; t < halfTime; t += Time.deltaTime)

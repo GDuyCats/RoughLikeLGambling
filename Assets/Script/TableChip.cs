@@ -156,6 +156,12 @@ public class TableChip : MonoBehaviour
         ReturnHome();
     }
 
+    // A chip in the dealer's rack: taking it is stealing, and it flies back to the rack after a while
+    public void MakeDealerChip()
+    {
+        belongsToDealer = true;
+    }
+
     // Use this look instead of a random color (the player's chips are colored by value)
     public void SetLook(Material material)
     {

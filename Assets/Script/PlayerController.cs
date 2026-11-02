@@ -207,6 +207,7 @@ public class PlayerController : MonoBehaviour
             if (pressTarget != null && !pressTarget.CanPress)
             {
                 // The button got locked while running (for example the hand ended): give up
+                pressTarget.Deny();
                 pressTarget = null;
                 clickTarget = null;
             }
@@ -253,6 +254,13 @@ public class PlayerController : MonoBehaviour
     // A click on a table button means "go press it". A click anywhere else means "walk there".
     private void HandleClick()
     {
+        if (TryGetClickedLockedButton(out TableButton locked))
+        {
+            // A locked button: it shakes "no" (its label says why) and the chibi stays put
+            locked.Deny();
+            return;
+        }
+
         if (TryGetClickedButton(out TableButton button))
         {
             pressTarget = button;
@@ -500,12 +508,16 @@ public class PlayerController : MonoBehaviour
         return state[cell] == 2;
     }
 
-    // Would the chibi bump into something standing here?
+    // Would the chibi bump into something standing here? Checked from just above its feet
+    // (so low things like buttons and short chip piles count) up to its head (but not the floor)
     private bool IsBlockedAt(Vector3 point)
     {
         float radius = ownCollider.bounds.extents.x + 0.05f;
-        Vector3 center = new Vector3(point.x, body.position.y + halfHeight * 0.15f, point.z);
-        Vector3 halfSize = new Vector3(radius, halfHeight * 0.7f, radius);
+        float feet = body.position.y - halfHeight;
+        float bottom = feet + FloorGap;
+        float top = body.position.y + halfHeight;
+        Vector3 center = new Vector3(point.x, (bottom + top) * 0.5f, point.z);
+        Vector3 halfSize = new Vector3(radius, (top - bottom) * 0.5f, radius);
 
         int count = Physics.OverlapBoxNonAlloc(center, halfSize, overlapBuffer, Quaternion.identity,
             Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
@@ -534,13 +546,30 @@ public class PlayerController : MonoBehaviour
             return true;
         }
 
-        float radius = ownCollider.bounds.extents.x * 0.9f;
+        // Sweep the chibi's whole shape (a capsule) from just above its feet to its head,
+        // so even low buttons count. A hair wider than the chibi, so it never scrapes a corner.
+        float radius = ownCollider.bounds.extents.x * 1.02f;
+        float feet = body.position.y - halfHeight;
+        Vector3 lowPoint = new Vector3(from.x, feet + FloorGap + radius, from.z);
+        Vector3 highPoint = new Vector3(from.x, Mathf.Max(lowPoint.y, body.position.y + halfHeight - radius), from.z);
+        Vector3 direction = offset / distance;
 
-        foreach (RaycastHit hit in Physics.SphereCastAll(from, radius, offset / distance, distance,
+        foreach (RaycastHit hit in Physics.CapsuleCastAll(lowPoint, highPoint, radius, direction, distance,
                      Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
         {
-            // Already touching at the start (distance 0) doesn't count: the chibi can walk away from it
-            if (hit.distance > 0f && IsObstacle(hit.collider))
+            if (!IsObstacle(hit.collider))
+            {
+                continue;
+            }
+
+            if (hit.distance > 0f)
+            {
+                return false;
+            }
+
+            // Already touching it at the start (squeezed between two buttons, say):
+            // it only blocks the way if the chibi would walk into it, not away from it
+            if (Vector3.Dot(Flat(hit.collider.ClosestPoint(from) - from), direction) > -0.01f)
             {
                 return false;
             }
@@ -586,6 +615,8 @@ public class PlayerController : MonoBehaviour
         int z = cell / width;
         return new Vector3(areaMin.x + x * pathCellSize, body.position.y, areaMin.y + z * pathCellSize);
     }
+
+    private const float FloorGap = 0.05f;   // The way-finding checks start this far above the feet, so the floor itself never counts
 
     private static Vector3 Flat(Vector3 vector)
     {
@@ -671,9 +702,9 @@ public class PlayerController : MonoBehaviour
         {
             TableButton button = hit.collider.GetComponentInParent<TableButton>();
 
-            if (button != null)
+            if (button != null && !button.Press())
             {
-                button.Press();
+                button.Deny();
             }
         }
 
@@ -871,6 +902,32 @@ public class PlayerController : MonoBehaviour
     // Shoot an invisible ray from the camera through the mouse, and see if it passes through a table button.
     // The ray looks through everything in the way (like the chibi standing in front of the button),
     // so a button you can see is a button you can click.
+    // The nearest thing under the mouse is a button that is visible but locked
+    private bool TryGetClickedLockedButton(out TableButton button)
+    {
+        button = null;
+        Ray ray = viewCamera.ScreenPointToRay(Mouse.current.position.ReadValue());
+        float closest = float.MaxValue;
+
+        foreach (RaycastHit hit in Physics.RaycastAll(ray, 500f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide))
+        {
+            if (hit.collider == ownCollider || hit.distance >= closest)
+            {
+                continue;
+            }
+
+            TableButton found = hit.collider.GetComponentInParent<TableButton>();
+
+            if (found != null && (found.CanPress || found.IsLocked))
+            {
+                button = found.IsLocked ? found : null;
+                closest = hit.distance;
+            }
+        }
+
+        return button != null;
+    }
+
     private bool TryGetClickedButton(out TableButton button)
     {
         button = null;

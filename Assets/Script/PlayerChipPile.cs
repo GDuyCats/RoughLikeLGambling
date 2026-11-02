@@ -44,6 +44,7 @@ public class PlayerChipPile : MonoBehaviour
 
     private RunManager run;
     private PlayerController player;
+    private DealerChipRack rack;     // The dealer's rack on this table (winnings come off it, lost bets land on it)
     private Material[] valueMaterials;
     private TextMeshPro pileLabel;
     private TextMeshPro betLabel;
@@ -91,6 +92,7 @@ public class PlayerChipPile : MonoBehaviour
     {
         run = FindFirstObjectByType<RunManager>();
         player = FindFirstObjectByType<PlayerController>();
+        rack = dealerTray != null ? dealerTray.GetComponent<DealerChipRack>() : null;
 
         CreateMaterials();
         pileLabel = CreateLabel("ChipCount", transform.position + countLabelOffset);
@@ -136,6 +138,7 @@ public class PlayerChipPile : MonoBehaviour
 
         if (Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame)
         {
+            AudioManager.Play(SoundId.ChipsMove);
             Restack();
         }
 
@@ -218,6 +221,7 @@ public class PlayerChipPile : MonoBehaviour
         if (betSpot != null)
         {
             List<int> chips = SplitIntoChips(betValue);
+            AudioManager.Play(SoundId.ChipsMove);
 
             for (int i = 0; i < chips.Count; i++)
             {
@@ -263,10 +267,12 @@ public class PlayerChipPile : MonoBehaviour
             // Winnings come over from the dealer's tray onto the bet...
             List<int> winnings = SplitIntoChips(change);
             int start = betChips.Count;
+            AudioManager.Play(SoundId.ChipsMove);
 
             for (int i = 0; i < winnings.Count; i++)
             {
-                TableChip chip = SpawnChip(winnings[i], dealerTray.position, true);
+                Vector3 from = rack != null ? rack.TakeChip(winnings[i]) : dealerTray.position;
+                TableChip chip = SpawnChip(winnings[i], from, true);
                 betChips.Add(chip);
                 StartCoroutine(FlyTo(chip.transform, BetStackPosition(start + i), i * chipGap));
             }
@@ -278,8 +284,9 @@ public class PlayerChipPile : MonoBehaviour
         }
         else
         {
-            // The dealer takes the bet
-            yield return SendBetChips(dealerTray.position);
+            // The dealer takes the bet: the chips land on the rack
+            AudioManager.Play(SoundId.ChipsMove);
+            yield return SendBetChipsToDealer();
         }
 
         betValue = 0;
@@ -293,6 +300,7 @@ public class PlayerChipPile : MonoBehaviour
     {
         isAnimating = true;
         idleSince = -1f;
+        AudioManager.Play(SoundId.ChipsMove);
         yield return SendBetChips(PileTop());
         betValue = 0;
         ShowBetLabel();
@@ -310,6 +318,41 @@ public class PlayerChipPile : MonoBehaviour
         float wait = flyTime + betChips.Count * chipGap;
         betChips.Clear();
         yield return new WaitForSeconds(wait);
+    }
+
+    // Each lost chip flies to its own stack on the dealer's rack and joins it
+    private IEnumerator SendBetChipsToDealer()
+    {
+        if (rack == null)
+        {
+            yield return SendBetChips(dealerTray.position);
+            yield break;
+        }
+
+        for (int i = 0; i < betChips.Count; i++)
+        {
+            StartCoroutine(FlyToRack(betChips[i], i * chipGap));
+        }
+
+        float wait = flyTime + betChips.Count * chipGap;
+        betChips.Clear();
+        yield return new WaitForSeconds(wait);
+    }
+
+    private IEnumerator FlyToRack(TableChip chip, float delay)
+    {
+        int value = chip.Value;
+        flyingChips.Add(chip);
+        yield return FlyTo(chip.transform, rack.SlotTop(value), delay);
+        flyingChips.Remove(chip);
+
+        if (chip != null)
+        {
+            Destroy(chip.gameObject);
+        }
+
+        rack.AddChip(value);
+        AudioManager.Play(SoundId.ChipHit, 0.4f);
     }
 
     // Stops every chip animation at once and removes the chips that were only flying for show
@@ -387,18 +430,7 @@ public class PlayerChipPile : MonoBehaviour
     // 500s, 100s, 25s, 5s and 1s, fewest chips first (like a casino cashier)
     private List<int> SplitIntoChips(int amount)
     {
-        List<int> chips = new List<int>();
-
-        foreach (int value in ChipValues)
-        {
-            while (amount >= value && chips.Count < maxChips)
-            {
-                chips.Add(value);
-                amount -= value;
-            }
-        }
-
-        return chips;
+        return ChipLook.Split(amount, maxChips);
     }
 
     // Two rows of columns: 500, 100, 25 at the back, 5 and 1 at the front
@@ -425,6 +457,7 @@ public class PlayerChipPile : MonoBehaviour
         TableChip chip = Instantiate(chipPrefab, position, Quaternion.identity, transform);
         chip.SetLook(valueMaterials[System.Array.IndexOf(ChipValues, value)]);
         chip.Value = value;
+        ChipLook.AddValueLabel(chip, value, font);
 
         if (decoration)
         {
@@ -487,6 +520,7 @@ public class PlayerChipPile : MonoBehaviour
 
     // ---------- Setup ----------
 
+    // One look per value, drawn the same way as every chip in the game (see ChipLook)
     private void CreateMaterials()
     {
         Renderer prefabRenderer = chipPrefab.GetComponentInChildren<Renderer>();
@@ -495,8 +529,8 @@ public class PlayerChipPile : MonoBehaviour
 
         for (int i = 0; i < ChipValues.Length; i++)
         {
-            Material material = baseMaterial != null ? new Material(baseMaterial) : new Material(Shader.Find("Universal Render Pipeline/Lit"));
-            material.color = i < valueColors.Length ? valueColors[i] : Color.white;
+            Color color = i < valueColors.Length ? valueColors[i] : Color.white;
+            Material material = ChipLook.MakeMaterial(color, baseMaterial);
             material.name = $"Chip{ChipValues[i]}";
             valueMaterials[i] = material;
         }

@@ -55,6 +55,13 @@ public class DiceGame : MonoBehaviour
     [SerializeField] private float payoutMultiplier = 1.2f;
     [SerializeField] private int baseWinBonus = 3;
 
+    [Header("Timer")]
+    [SerializeField] private DecisionTimer decisionTimer;  // The countdown ring on the felt (empty = no time limit)
+    [SerializeField] private float decisionSeconds = 6f;   // After a guess, the next one must come within this time
+
+    private bool playerIsActive;   // The player guessed by themselves; the clock only runs then
+    private string autoNote;       // "Time's up!" line for the result, after the game guessed for the player
+
     private TMP_Text underButtonText;
     private TMP_Text sevenButtonText;
     private TMP_Text overButtonText;
@@ -67,21 +74,57 @@ public class DiceGame : MonoBehaviour
         sevenButtonText = sevenButton.GetComponentInChildren<TMP_Text>();
         overButtonText = overButton.GetComponentInChildren<TMP_Text>();
 
-        underButton.onClick.AddListener(() => Guess(GuessType.Under));
-        sevenButton.onClick.AddListener(() => Guess(GuessType.Seven));
-        overButton.onClick.AddListener(() => Guess(GuessType.Over));
+        underButton.onClick.AddListener(() => PlayerGuess(GuessType.Under));
+        sevenButton.onClick.AddListener(() => PlayerGuess(GuessType.Seven));
+        overButton.onClick.AddListener(() => PlayerGuess(GuessType.Over));
     }
 
     private void OnEnable()
     {
         run.StateChanged += RefreshUI;
+        run.RoundStarted += StopClockUntilPlayerGuesses;
         ResetGame();
         RefreshUI();
+    }
+
+    // The player pressed a button themselves: from now on the clock runs between throws
+    private void PlayerGuess(GuessType guess)
+    {
+        if (!run.CanPlay || isRolling)
+        {
+            return;
+        }
+
+        playerIsActive = true;
+        autoNote = null;
+        Guess(guess);
+    }
+
+    // Time's up: the game picks under or over at random. Then the clock waits until the player guesses again,
+    // so a player who walked away doesn't lose all their plays.
+    private void GuessForPlayer()
+    {
+        GuessType guess = Random.value < 0.5f ? GuessType.Under : GuessType.Over;
+        playerIsActive = false;
+        autoNote = $"Time's up! Random pick: {guess.ToString().ToUpper()} 7.";
+        Guess(guess);
+    }
+
+    private void StopClockUntilPlayerGuesses()
+    {
+        playerIsActive = false;
+
+        if (decisionTimer != null)
+        {
+            decisionTimer.Cancel();
+        }
     }
 
     private void OnDisable()
     {
         run.StateChanged -= RefreshUI;
+        run.RoundStarted -= StopClockUntilPlayerGuesses;
+        StopClockUntilPlayerGuesses();
 
         if (rollCamera != null)
         {
@@ -110,6 +153,11 @@ public class DiceGame : MonoBehaviour
         if (!run.CanPlay || isRolling)
         {
             return;
+        }
+
+        if (decisionTimer != null)
+        {
+            decisionTimer.Cancel();
         }
 
         StartCoroutine(RollRoutine(guess));
@@ -188,9 +236,21 @@ public class DiceGame : MonoBehaviour
             rollCamera.SetActive(false);
         }
 
+        if (autoNote != null)
+        {
+            message = autoNote + "\n" + message;
+            autoNote = null;
+        }
+
         isRolling = false;
         run.SetMinigameBusy(false);
         run.FinishPlay(chipChange, damage, message);
+
+        // The next throw is on the clock (only if the player is playing, and the round goes on)
+        if (playerIsActive && decisionTimer != null && run.CanPlay)
+        {
+            decisionTimer.Begin(decisionSeconds, GuessForPlayer, () => run.CanPlay && !isRolling);
+        }
     }
 
     // Throw a die from the dealer's side toward the aim spot, with a little random aim and spin

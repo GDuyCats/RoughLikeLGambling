@@ -19,9 +19,8 @@ public static class PlayerChipsBuilder
     private const string MaterialFolder = "Assets/Materials/Chips";
 
     // Spots on each table, in the arena's own space (x = left/right, z = toward the dealer)
-    public static readonly Vector3 PileSpot = new Vector3(0f, 0f, -7.3f);
-    public static readonly Vector2 SquareSize = new Vector2(5.2f, 3f);
-    public static readonly Vector3 DealerTraySpot = new Vector3(-8f, 0f, 6.2f);
+    public static Vector3 PileSpot => TableSpots.PileSpot;
+    public static Vector2 SquareSize => TableSpots.SquareSize;
     private const float TrayStackSpacing = 1.5f;
 
     [MenuItem("Tools/Set Up Player Chips")]
@@ -112,7 +111,7 @@ public static class PlayerChipsBuilder
         // The dealer's tray, in front of the dealer
         GameObject tray = new GameObject("DealerTray");
         tray.transform.SetParent(root.transform, false);
-        tray.transform.localPosition = DealerTraySpot;
+        tray.transform.localPosition = DealerTraySpotFor(table.Minigame);
         int stacksMoved = MoveOldChipsToTray(arena, root.transform, tray.transform);
 
         // The player's pile
@@ -134,12 +133,13 @@ public static class PlayerChipsBuilder
 
     public static Vector3 BetSpotFor(MinigameType game)
     {
-        return game switch
-        {
-            MinigameType.HighLow => new Vector3(-3.5f, 0f, -0.9f),
-            MinigameType.Dice => new Vector3(-4.5f, 0f, -0.9f),
-            _ => new Vector3(-5.5f, 0f, -0.5f)
-        };
+        return TableSpots.BetSpotFor(game);
+    }
+
+    // The dealer's chip rack sits in the middle, right in front of the dealer, on every table
+    public static Vector3 DealerTraySpotFor(MinigameType game)
+    {
+        return TableSpots.RackSpot;
     }
 
     // A thin gold outline on the table: the square the player's chips sit in

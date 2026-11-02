@@ -19,7 +19,7 @@ public class RunManager : MonoBehaviour
     [SerializeField] private TMP_Text statsText;
     [SerializeField] private TMP_Text bossText;
     [SerializeField] private Button restartButton;
-    [SerializeField] private Button betDownButton;
+    [SerializeField] private Button betDownButton;   // Old x1/x2/x3 buttons: hidden now, the bet is set on each table's bet panel
     [SerializeField] private Button betUpButton;
 
     [Header("Upgrade Screen")]
@@ -57,8 +57,9 @@ public class RunManager : MonoBehaviour
 
     [Header("Rules")]
     [SerializeField] private int startingChips = 100;
-    [SerializeField] private int betAmount = 10;
-    [SerializeField] private int startingMaxBetLevel = 3;
+    [SerializeField] private int betAmount = 10;               // The smallest bet (the Bet Increase upgrade raises it)
+    [SerializeField] private int tableLimitPerRound = 100;     // The largest bet: 100 in round 1, 200 in round 2, and so on
+    [SerializeField] private int tableLimitPerUpgrade = 50;    // Each copy of the Extra Bet Level upgrade raises the limit this much
     [SerializeField] private int playsPerRound = 12;
     [SerializeField] private int baseRoundGoal = 20;
     [SerializeField] private int goalIncreasePerRound = 10;
@@ -82,7 +83,8 @@ public class RunManager : MonoBehaviour
     private int targetChips;
     private int playsLeft;
     private int playsUsedThisRound;
-    private int betLevel = 1;
+    private int currentBet;    // Chosen on the table's bet panel
+    private bool isAllIn;      // ALL IN: the bet is every chip, even above the table limit (for one play)
     private bool useBaseBet;   // See AtBaseBet()
     private bool isGameOver;
     private bool isVictory;
@@ -99,8 +101,11 @@ public class RunManager : MonoBehaviour
     public int PlaysLeft => playsLeft;
     public int RoundNumber => roundNumber;
     public int Chips => chips;
-    public int BetLevel => betLevel;
-    public int MaxBetLevel => startingMaxBetLevel + GetUpgradeTotal(UpgradeType.ExtraBetLevel);
+    public int MinBet => betAmount + GetUpgradeTotal(UpgradeType.BetIncrease);
+    public int TableLimit => Mathf.Max(MinBet, tableLimitPerRound * Mathf.Max(1, roundNumber)
+        + tableLimitPerUpgrade * GetUpgradeTotal(UpgradeType.ExtraBetLevel));
+    public bool IsAllIn => isAllIn;
+    public bool CanChangeBet => CanPlay && !IsMinigameBusy && roundNumber > 0;
     public int MaxHealth => playerMaxHealth + (character != null ? character.MaxHealthBonus : 0) + GetUpgradeTotal(UpgradeType.MaxHealth);
     public bool HasPlayedThisRound => playsUsedThisRound > 0;
     public bool IsCurseRound => currentCurse != null;
@@ -123,8 +128,16 @@ public class RunManager : MonoBehaviour
         restartButtonText = restartButton.GetComponentInChildren<TMP_Text>();
 
         restartButton.onClick.AddListener(StartNewRun);
-        betDownButton.onClick.AddListener(() => ChangeBetLevel(-1));
-        betUpButton.onClick.AddListener(() => ChangeBetLevel(1));
+        // The bet is now set on each table's bet panel
+        if (betDownButton != null)
+        {
+            betDownButton.gameObject.SetActive(false);
+        }
+
+        if (betUpButton != null)
+        {
+            betUpButton.gameObject.SetActive(false);
+        }
 
         if (startRunOnLoad)
         {
@@ -150,7 +163,8 @@ public class RunManager : MonoBehaviour
 
         // Green while counting up, red while counting down, white when settled
         string color = shown < chips ? "#7BE495" : shown > chips ? "#FF6B6B" : "#FFFFFF";
-        chipsText.text = $"Chips: <color={color}>{shown}</color>   Bet: {GetCurrentBet()} (x{betLevel})";
+        string betNote = isAllIn ? "ALL IN" : $"max {TableLimit}";
+        chipsText.text = $"Chips: <color={color}>{shown}</color>   Bet: {GetCurrentBet()} ({betNote})";
     }
 
     // Resets the run, then waits for the player to choose a chibi
@@ -160,7 +174,8 @@ public class RunManager : MonoBehaviour
         chips = startingChips;
         displayedChips = chips;
         ownedUpgrades.Clear();
-        betLevel = 1;
+        currentBet = betAmount;
+        isAllIn = false;
         roundNumber = 0;
         targetChips = 0;
         playsLeft = 0;
@@ -234,7 +249,14 @@ public class RunManager : MonoBehaviour
     public void SetMinigameBusy(bool busy)
     {
         bool starting = busy && !IsMinigameBusy;
+        bool ending = !busy && IsMinigameBusy;
         IsMinigameBusy = busy;
+
+        // ALL IN lasts for one play: afterwards the bet goes back under the table limit
+        if (ending)
+        {
+            isAllIn = false;
+        }
 
         if (starting)
         {
@@ -467,11 +489,11 @@ public class RunManager : MonoBehaviour
 
     public int GetCurrentBet()
     {
-        return GetBetForLevel(useBaseBet ? 1 : betLevel);
+        return useBaseBet ? MinBet : currentBet;
     }
 
-    // Works something out as if the bet level were x1. The minigames use this for boss damage,
-    // so a higher bet level only changes the chips: damage = AtBaseBet(() => GetWinAmount(...)).
+    // Works something out as if the bet were the smallest bet. The minigames use this for boss damage,
+    // so a bigger bet only changes the chips: damage = AtBaseBet(() => GetWinAmount(...)).
     public int AtBaseBet(System.Func<int> calculate)
     {
         useBaseBet = true;
@@ -486,32 +508,67 @@ public class RunManager : MonoBehaviour
         }
     }
 
-    private int GetBetForLevel(int level)
-    {
-        return (betAmount + GetUpgradeTotal(UpgradeType.BetIncrease)) * level;
-    }
+    // ---------- The bet panel ----------
 
-    private bool CanChangeBet()
-    {
-        return CanPlay && !IsMinigameBusy;
-    }
+    // The largest bet the +chip buttons can reach: the table limit, or every chip if that is less
+    public int HighestBet => Mathf.Max(MinBet, Mathf.Min(TableLimit, chips));
 
-    private void ChangeBetLevel(int change)
+    // +1, +5, +25, +100 on the bet panel
+    public void AddToBet(int amount)
     {
-        if (!CanChangeBet())
+        if (!CanChangeBet)
         {
             return;
         }
 
-        int newLevel = Mathf.Clamp(betLevel + change, 1, MaxBetLevel);
-
-        if (change > 0 && GetBetForLevel(newLevel) > chips)
-        {
-            return;
-        }
-
-        betLevel = newLevel;
+        int start = isAllIn ? Mathf.Min(currentBet, HighestBet) : currentBet;
+        isAllIn = false;
+        currentBet = Mathf.Min(start + amount, HighestBet);
         UpdateUI();
+    }
+
+    // CLEAR: back to the smallest bet
+    public void ClearBet()
+    {
+        if (!CanChangeBet)
+        {
+            return;
+        }
+
+        isAllIn = false;
+        currentBet = MinBet;
+        UpdateUI();
+    }
+
+    // ALL IN: every chip, even above the table limit
+    public void GoAllIn()
+    {
+        if (!CanChangeBet)
+        {
+            return;
+        }
+
+        isAllIn = true;
+        currentBet = Mathf.Max(1, chips);
+        UpdateUI();
+    }
+
+    // Keeps the bet possible: never below the smallest bet, never above the limit or the chips.
+    // The bet stays the same during a play, so the result is paid on the bet that was placed.
+    private void KeepBetInRange()
+    {
+        if (IsMinigameBusy)
+        {
+            return;
+        }
+
+        if (isAllIn)
+        {
+            currentBet = Mathf.Max(1, chips);
+            return;
+        }
+
+        currentBet = Mathf.Clamp(currentBet, MinBet, HighestBet);
     }
 
     public int GetBossValue(BossEffect effect)
@@ -840,6 +897,12 @@ public class RunManager : MonoBehaviour
         }
 
         float nextValue = GetStackedValue(upgrade, owned + 1) - GetStackedValue(upgrade, owned);
+
+        if (upgrade.Type == UpgradeType.ExtraBetLevel)
+        {
+            return $"\n<size=70%>Owned x{owned}. Next copy: about +{nextValue * tableLimitPerUpgrade:0} max bet</size>";
+        }
+
         return $"\n<size=70%>Owned x{owned}. Next copy: +{nextValue:0.#}{GetUnitSuffix(upgrade.Type)}</size>";
     }
 
@@ -850,7 +913,7 @@ public class RunManager : MonoBehaviour
             UpgradeType.WinPayoutPercent or UpgradeType.RoundEndInterest
                 or UpgradeType.BossLifesteal or UpgradeType.ParryRewardPercent => "%",
             UpgradeType.ExtraGuesses => " plays",
-            UpgradeType.ExtraBetLevel => " bet level",
+            UpgradeType.ExtraBetLevel => " table limit steps",
             UpgradeType.MaxHealth => " HP",
             UpgradeType.BossShield => " shield",
             UpgradeType.PerfectWindowMs => " ms",
@@ -921,7 +984,7 @@ public class RunManager : MonoBehaviour
             text += $"\nChibi: {character.DisplayName} (parry: {parryType})";
         }
 
-        text += $"\nBet: {GetCurrentBet()} (x{betLevel} of x{MaxBetLevel})";
+        text += $"\nBet: {GetCurrentBet()} (min {MinBet}, table limit {TableLimit})";
         text += $"\nPlays per round: {playsPerRound + GetUpgradeTotal(UpgradeType.ExtraGuesses)}";
 
         int winPercent = GetUpgradeTotal(UpgradeType.WinPayoutPercent);
@@ -1000,11 +1063,7 @@ public class RunManager : MonoBehaviour
 
     private void UpdateUI()
     {
-        while (betLevel > 1 && GetCurrentBet() > chips)
-        {
-            betLevel--;
-        }
-
+        KeepBetInRange();
         RefreshChipsText();
         healthText.text = $"HP: {playerHealth}/{MaxHealth}";
 
@@ -1034,7 +1093,7 @@ public class RunManager : MonoBehaviour
                 : $"Overtime starts on play {overtimeStartPlay}";
 
             bossText.text = $"<color=#FFD54F>FINAL BOSS: {finalBoss.DisplayName}</color>   HP {bossHealth}/{finalBoss.MaxHealth}\n"
-                + $"<size=80%>Wins hurt the boss, losses make it attack. Damage ignores your bet level.\n{overtimeLine}</size>";
+                + $"<size=80%>Wins hurt the boss, losses make it attack. Damage ignores your bet size.\n{overtimeLine}</size>";
         }
         else if (IsFinalRound)
         {
@@ -1046,11 +1105,6 @@ public class RunManager : MonoBehaviour
         }
 
         restartButtonText.text = isVictory ? "PLAY AGAIN" : "RESTART";
-
-        betDownButton.interactable = CanChangeBet() && betLevel > 1;
-        betUpButton.interactable = CanChangeBet()
-            && betLevel < MaxBetLevel
-            && GetBetForLevel(betLevel + 1) <= chips;
 
         StateChanged?.Invoke();
     }

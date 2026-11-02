@@ -51,6 +51,21 @@ public class BlackjackGame : MonoBehaviour
     [SerializeField] private float handSpacing = 4f;      // Distance between split hands
     [SerializeField] private float splitCardOffset = 0.7f;   // Cards in a split hand overlap, fanned by this much
 
+    [Header("Seats")]
+    [SerializeField] private float seatArcRadius = 8.6f;   // The hands sit on an arc around the dealer, like seats at a real table (0 = one straight row)
+    [SerializeField] private float seatAngle = 26f;        // Degrees between two seats
+    [SerializeField] private float seatCardSpread = 1f;    // Cards of a hand on a seat overlap, fanned by this much (the corners stay readable)
+    [SerializeField] private Renderer[] seatFrames;        // The 5 frames printed on the felt, left to right (made by Tools > Rearrange Tables)
+    [SerializeField] private Color frameIdleColor = new Color(1f, 1f, 1f, 0.3f);
+    [SerializeField] private Color frameUsedColor = new Color(1f, 1f, 1f, 0.8f);
+    [SerializeField] private Color frameActiveColor = new Color(1f, 0.8f, 0.25f, 1f);
+
+    [Header("Shoe and Timer")]
+    [SerializeField] private CardShoe shoe;                // 8 decks with a cut card (empty = a fresh deck every hand, the old way)
+    [SerializeField] private DecisionTimer decisionTimer;  // The countdown ring on the felt (empty = no time limit)
+    [SerializeField] private float decisionSeconds = 10f;  // Time to choose; when it runs out the hand stands (insurance: no thanks)
+    [SerializeField] private float discardGap = 0.05f;     // Used cards go to the discard holder one after another
+
     [Header("Rules")]
     [SerializeField] private float winMultiplier = 1.5f;
     [SerializeField] private float blackjackMultiplier = 2.5f;
@@ -106,6 +121,9 @@ public class BlackjackGame : MonoBehaviour
     private Transform handArrow;
     private Vector3 arrowTip;
 
+    private Material[] frameMaterials;
+    private bool timedOut;             // The clock ran out this hand: the game chose for the player
+
     private bool isAskingInsurance;    // The dealer shows an ace: waiting for the player's answer
     private bool isEvenMoneyOffer;     // The player has a blackjack, so the offer is even money
     private int insuranceChoice;       // 0 = no answer yet, 1 = took it, 2 = no thanks
@@ -144,6 +162,7 @@ public class BlackjackGame : MonoBehaviour
 
         CreateTableNumbers();
         CreateHandArrow();
+        SetUpSeatFrames();
 
         if (!showScreenTotals)
         {
@@ -155,6 +174,8 @@ public class BlackjackGame : MonoBehaviour
     // The arrow nudges toward the hand being played
     private void Update()
     {
+        UpdateSeatFrames();
+
         if (handArrow != null && handArrow.gameObject.activeSelf)
         {
             float nudge = (Mathf.Sin(Time.time * arrowBobSpeed) + 1f) * 0.5f * arrowBob;
@@ -165,6 +186,7 @@ public class BlackjackGame : MonoBehaviour
     private void OnEnable()
     {
         run.StateChanged += RefreshUI;
+        run.RunStarted += OnRunStarted;
         ResetGame();
         RefreshUI();
     }
@@ -172,11 +194,24 @@ public class BlackjackGame : MonoBehaviour
     private void OnDisable()
     {
         run.StateChanged -= RefreshUI;
+        run.RunStarted -= OnRunStarted;
+        StopDecisionClock();
+    }
+
+    // A new run starts with a full, freshly shuffled shoe
+    private void OnRunStarted()
+    {
+        if (shoe != null)
+        {
+            ResetGame();
+            shoe.ResetShoe();
+        }
     }
 
     private void ResetGame()
     {
         StopAllCoroutines();
+        StopDecisionClock();
         ClearTable();
 
         hands.Clear();
@@ -221,9 +256,20 @@ public class BlackjackGame : MonoBehaviour
         RefreshUI();   // The old hand's numbers and arrow go away with its cards
 
         run.SetMinigameBusy(true);
+        timedOut = false;
         yield return DiscardAllRoutine(oldCards);
 
-        BuildDeck();
+        // The cut card came out last hand: shuffle the shoe before dealing
+        if (shoe != null && shoe.NeedsShuffle)
+        {
+            run.ShowMessage("Shuffling the shoe...");
+            yield return shoe.ShuffleRoutine(OnTable(DealerSlot(0) + Vector3.right * cardSpacing * 0.5f));
+        }
+
+        if (shoe == null)
+        {
+            BuildDeck();
+        }
 
         PlayerHand hand = new PlayerHand();
         hands.Add(hand);
@@ -271,6 +317,7 @@ public class BlackjackGame : MonoBehaviour
             return;
         }
 
+        StopDecisionClock();
         StartCoroutine(HitRoutine());
     }
 
@@ -291,6 +338,7 @@ public class BlackjackGame : MonoBehaviour
         {
             run.ShowMessage(HandPrefix() + "Hit or stand?");
             RefreshUI();
+            StartDecisionClock();
         }
     }
 
@@ -301,6 +349,7 @@ public class BlackjackGame : MonoBehaviour
             return;
         }
 
+        StopDecisionClock();
         StartCoroutine(NextHandRoutine());
     }
 
@@ -312,6 +361,7 @@ public class BlackjackGame : MonoBehaviour
             return;
         }
 
+        StopDecisionClock();
         StartCoroutine(DoubleRoutine());
     }
 
@@ -335,6 +385,7 @@ public class BlackjackGame : MonoBehaviour
             return;
         }
 
+        StopDecisionClock();
         StartCoroutine(SplitRoutine());
     }
 
@@ -377,6 +428,7 @@ public class BlackjackGame : MonoBehaviour
             return;
         }
 
+        StopDecisionClock();
         StartCoroutine(SurrenderRoutine());
     }
 
@@ -418,6 +470,7 @@ public class BlackjackGame : MonoBehaviour
 
         run.ShowMessage(HandPrefix() + BuildChoicesMessage());
         RefreshUI();
+        StartDecisionClock();
     }
 
     // This hand is done: move on to the next one, or to the dealer when all hands are done
@@ -583,6 +636,73 @@ public class BlackjackGame : MonoBehaviour
         return allowSurrender && IsOnFirstTwoCards() && hands.Count == 1;
     }
 
+    // ---------- Why a button is locked (null = it isn't, or it's just waiting for cards to land) ----------
+
+    private string DoubleLockReason()
+    {
+        if (!CanAct() || CanDoubleDown())
+        {
+            return null;
+        }
+
+        if (ActiveHand.Cards.Count != 2)
+        {
+            return "First 2 cards only";
+        }
+
+        if (ActiveHand.IsSplitAces)
+        {
+            return "Not on split aces";
+        }
+
+        return $"Need {ChipsForOneMoreBet()} chips";
+    }
+
+    private string SplitLockReason()
+    {
+        if (!CanAct() || CanSplit())
+        {
+            return null;
+        }
+
+        if (ActiveHand.Cards.Count != 2)
+        {
+            return "First 2 cards only";
+        }
+
+        if (ActiveHand.IsSplitAces)
+        {
+            return "Not on split aces";
+        }
+
+        if (!IsPair(ActiveHand))
+        {
+            return "Needs a pair";
+        }
+
+        if (hands.Count >= maxHands)
+        {
+            return $"{maxHands} hands max";
+        }
+
+        return $"Need {ChipsForOneMoreBet()} chips";
+    }
+
+    private string SurrenderLockReason()
+    {
+        if (!CanAct() || CanSurrender())
+        {
+            return null;
+        }
+
+        return hands.Count > 1 ? "Not after a split" : "First 2 cards only";
+    }
+
+    private int ChipsForOneMoreBet()
+    {
+        return run.GetCurrentBet() * (TotalBetUnits() + 1);
+    }
+
     // ---------- Insurance and even money ----------
 
     private bool DealerShowsAce()
@@ -609,6 +729,7 @@ public class BlackjackGame : MonoBehaviour
         }
 
         insuranceChoice = 1;
+        StopDecisionClock();
     }
 
     private void DeclineInsurance()
@@ -619,6 +740,7 @@ public class BlackjackGame : MonoBehaviour
         }
 
         insuranceChoice = 2;
+        StopDecisionClock();
     }
 
     private void ClearInsurance()
@@ -639,6 +761,7 @@ public class BlackjackGame : MonoBehaviour
         insuranceChoice = 0;
         run.ShowMessage(BuildInsuranceMessage(hand));
         RefreshUI();
+        StartDecisionClock();
 
         yield return new WaitUntil(() => insuranceChoice != 0);
 
@@ -712,8 +835,18 @@ public class BlackjackGame : MonoBehaviour
     // ---------- Cards on the table ----------
 
     // Where a card of the player's goes. One hand: a normal row. Split hands: small fanned groups side by side.
+    // With seats: every hand sits on its own seat along the arc; the first two cards are centered on the seat.
     private Vector3 PlayerSlot(int handIndex, int cardIndex)
     {
+        if (seatArcRadius > 0f)
+        {
+            int seat = SeatFor(handIndex);
+
+            return SeatPosition(seat)
+                + SeatRotation(seat) * Vector3.right * seatCardSpread * (cardIndex - 0.5f)
+                + Vector3.up * 0.01f * cardIndex;
+        }
+
         if (hands.Count <= 1)
         {
             return playerRowStart.position + Vector3.right * cardSpacing * cardIndex;
@@ -724,6 +857,40 @@ public class BlackjackGame : MonoBehaviour
             + Vector3.up * 0.01f * cardIndex;   // Later cards lie slightly on top
     }
 
+    // Which seat a hand sits on: -2 (far left) to 2 (far right). One hand sits in the middle;
+    // split hands spread out evenly: 2 hands on -1 and 1, 3 on -1, 0, 1, 4 on -2, -1, 1, 2.
+    private int SeatFor(int handIndex)
+    {
+        switch (hands.Count)
+        {
+            case 2: return handIndex == 0 ? -1 : 1;
+            case 3: return handIndex - 1;
+            case 4: return handIndex < 2 ? handIndex - 2 : handIndex - 1;
+            default: return 0;
+        }
+    }
+
+    // The middle of a seat. The middle seat is where a 2-card hand used to start (playerRowStart);
+    // the others go around the arc's center, which lies toward the dealer.
+    private Vector3 SeatPosition(int seat)
+    {
+        Vector3 middleSeat = playerRowStart.position + Vector3.right * cardSpacing * 0.5f;
+        Vector3 arcCenter = middleSeat + Vector3.forward * seatArcRadius;
+        Vector3 fromCenter = SeatRotation(seat) * (Vector3.back * seatArcRadius);
+        return new Vector3(arcCenter.x + fromCenter.x, middleSeat.y, arcCenter.z + fromCenter.z);
+    }
+
+    // Seats turn with the arc, so their cards face the arc's center (the dealer)
+    private Quaternion SeatRotation(int seat)
+    {
+        return seatArcRadius > 0f ? Quaternion.Euler(0f, -seat * seatAngle, 0f) : Quaternion.identity;
+    }
+
+    private Quaternion HandRotation(int handIndex)
+    {
+        return SeatRotation(SeatFor(handIndex));
+    }
+
     private Vector3 DealerSlot(int cardIndex)
     {
         return dealerRowStart.position + Vector3.right * cardSpacing * cardIndex;
@@ -731,9 +898,23 @@ public class BlackjackGame : MonoBehaviour
 
     private TableCard SpawnCard()
     {
+        if (shoe != null)
+        {
+            return shoe.SpawnCard(cardPrefab);
+        }
+
         TableCard cardObject = Instantiate(cardPrefab, deckSpot.position, Quaternion.identity);
         cardObject.SetSprite(CardArt.GetCardBack());
         return cardObject;
+    }
+
+    // From the shoe, the card is pulled out of the mouth first
+    private IEnumerator PullFromShoe(TableCard cardObject)
+    {
+        if (shoe != null)
+        {
+            yield return shoe.SlideOut(cardObject);
+        }
     }
 
     private IEnumerator DealToPlayerRoutine(PlayerHand hand)
@@ -744,7 +925,9 @@ public class BlackjackGame : MonoBehaviour
         TableCard cardObject = SpawnCard();
         hand.CardObjects.Add(cardObject);
 
-        yield return cardObject.MoveTo(PlayerSlot(hands.IndexOf(hand), hand.CardObjects.Count - 1));
+        yield return PullFromShoe(cardObject);
+        int handIndex = hands.IndexOf(hand);
+        yield return cardObject.MoveTo(PlayerSlot(handIndex, hand.CardObjects.Count - 1), HandRotation(handIndex));
         yield return cardObject.FlipTo(CardSprite(card));
         RefreshUI();
     }
@@ -757,7 +940,8 @@ public class BlackjackGame : MonoBehaviour
         TableCard cardObject = SpawnCard();
         dealerCards.Add(cardObject);
 
-        yield return cardObject.MoveTo(DealerSlot(dealerCards.Count - 1));
+        yield return PullFromShoe(cardObject);
+        yield return cardObject.MoveTo(DealerSlot(dealerCards.Count - 1), Quaternion.identity);
 
         if (faceUp)
         {
@@ -776,7 +960,7 @@ public class BlackjackGame : MonoBehaviour
 
             for (int cardIndex = 0; cardIndex < cardObjects.Count; cardIndex++)
             {
-                StartCoroutine(Track(cardObjects[cardIndex].MoveTo(PlayerSlot(handIndex, cardIndex))));
+                StartCoroutine(Track(cardObjects[cardIndex].MoveTo(PlayerSlot(handIndex, cardIndex), HandRotation(handIndex), false)));
             }
         }
 
@@ -809,6 +993,11 @@ public class BlackjackGame : MonoBehaviour
         foreach (TableCard card in cards)
         {
             StartCoroutine(Track(DiscardRoutine(card)));
+
+            if (shoe != null)
+            {
+                yield return new WaitForSeconds(discardGap);
+            }
         }
 
         yield return new WaitUntil(() => runningAnimations == 0);
@@ -821,6 +1010,16 @@ public class BlackjackGame : MonoBehaviour
             yield break;
         }
 
+        // Into the discard holder, face down
+        if (shoe != null)
+        {
+            Vector3 spot = shoe.ReserveDiscardSpot(out Quaternion rotation);
+            StartCoroutine(card.FlipTo(CardArt.GetCardBack(), false));
+            yield return card.MoveTo(spot, rotation);
+            shoe.Land(card);
+            yield break;
+        }
+
         yield return card.MoveTo(discardSpot.position);
         Destroy(card.gameObject);
     }
@@ -828,7 +1027,14 @@ public class BlackjackGame : MonoBehaviour
     // Instantly remove every card (used when the table is reset)
     private void ClearTable()
     {
-        foreach (TableCard card in AllCardObjects())
+        List<TableCard> onTable = AllCardObjects();
+
+        if (shoe != null)
+        {
+            shoe.AddDiscardedInstantly(onTable.Count);
+        }
+
+        foreach (TableCard card in onTable)
         {
             if (card != null)
             {
@@ -931,18 +1137,31 @@ public class BlackjackGame : MonoBehaviour
             chipsLost -= insuranceResult;
         }
 
+        // Split hands share one line ("Hand 1: You win! +18  ·  Hand 2: Bust! -10"), so the message stays short
+        string message = string.Join(hands.Count > 1 ? "  ·  " : "\n", results);
+
         if (insuranceNote != null)
         {
-            results.Add(insuranceNote);
+            message += "\n" + insuranceNote;
         }
-
-        string message = string.Join("\n", results);
 
         if (hands.Count > 1 || insuranceNote != null)
         {
             int total = chipsWon - chipsLost;
             message += total >= 0 ? $"\nTotal: +{total} chips" : $"\nTotal: {total} chips";
         }
+
+        if (timedOut)
+        {
+            message += "\nTime ran out, so you stood.";
+        }
+
+        if (shoe != null && shoe.NeedsShuffle)
+        {
+            message += "\nThe cut card is out: the shoe is shuffled before the next hand.";
+        }
+
+        StopDecisionClock();
 
         run.SetMinigameBusy(false);
         run.FinishMixedPlay(chipsWon, chipsLost, damageDealt, damageTaken, message);
@@ -1046,6 +1265,11 @@ public class BlackjackGame : MonoBehaviour
 
     private int DrawCard()
     {
+        if (shoe != null)
+        {
+            return shoe.Draw();
+        }
+
         int index = Random.Range(0, deck.Count);
         int card = deck[index];
         deck.RemoveAt(index);
@@ -1162,7 +1386,9 @@ public class BlackjackGame : MonoBehaviour
             {
                 insuranceButtonText.text = isEvenMoneyOffer
                     ? $"EVEN MONEY\nTake +{GetWinAmount(hands[0], winMultiplier)} chips"
-                    : $"INSURANCE\nBet +{GetInsuranceCost()} chips";
+                    : CanAffordInsurance()
+                        ? $"INSURANCE\nBet +{GetInsuranceCost()} chips"
+                        : $"INSURANCE\nNeed {run.GetCurrentBet() + GetInsuranceCost()} chips";
             }
         }
 
@@ -1173,11 +1399,13 @@ public class BlackjackGame : MonoBehaviour
         splitButton.interactable = CanSplit();
         surrenderButton.interactable = CanSurrender();
 
+        // Each button says what it costs, or, when it's locked, why
         int bet = run.GetCurrentBet();
-        dealButtonText.text = $"DEAL\nBet {bet} chips";
-        doubleButtonText.text = $"DOUBLE\nBet +{bet} chips";
-        splitButtonText.text = $"SPLIT\nBet +{bet} chips";
-        surrenderButtonText.text = $"SURRENDER\nLose {Mathf.CeilToInt(Mathf.Max(0, bet - run.GetUpgradeTotal(UpgradeType.LossReduction)) / 2f)} chips";
+        dealButtonText.text = run.Chips < bet && run.CanPlay ? $"DEAL\nNeed {bet} chips" : $"DEAL\nBet {bet} chips";
+        doubleButtonText.text = "DOUBLE\n" + (DoubleLockReason() ?? $"Bet +{bet} chips");
+        splitButtonText.text = "SPLIT\n" + (SplitLockReason() ?? $"Bet +{bet} chips");
+        surrenderButtonText.text = "SURRENDER\n" + (SurrenderLockReason()
+            ?? $"Lose {Mathf.CeilToInt(Mathf.Max(0, bet - run.GetUpgradeTotal(UpgradeType.LossReduction)) / 2f)} chips");
 
         UpdateTableNumbers();
         UpdateHandArrow();
@@ -1250,7 +1478,10 @@ public class BlackjackGame : MonoBehaviour
             total.color = value > BlackjackValue ? bustColor
                 : split && playing && i == activeIndex ? activeTotalColor
                 : totalColor;
-            total.transform.position = OnTable(HandCenter(i) + Vector3.back * (cardHalfLength + 0.5f));
+            Quaternion seatRotation = HandRotation(i);
+            total.transform.SetPositionAndRotation(
+                OnTable(HandCenter(i) + seatRotation * Vector3.back * (cardHalfLength + 0.6f)),
+                seatRotation * Quaternion.Euler(90f, 0f, 0f));
         }
     }
 
@@ -1274,7 +1505,9 @@ public class BlackjackGame : MonoBehaviour
             return;
         }
 
-        bool show = isHandInProgress && !isDealerTurn && !isAskingInsurance && hands.Count > 1 && ActiveHand.CardObjects.Count > 0;
+        // With seat frames, the active hand's frame lights up instead
+        bool hasFrames = seatFrames != null && seatFrames.Length > 0 && seatArcRadius > 0f;
+        bool show = !hasFrames && isHandInProgress && !isDealerTurn && !isAskingInsurance && hands.Count > 1 && ActiveHand.CardObjects.Count > 0;
         handArrow.gameObject.SetActive(show);
 
         if (show)
@@ -1289,6 +1522,12 @@ public class BlackjackGame : MonoBehaviour
     private Vector3 HandCenter(int handIndex)
     {
         int cardCount = Mathf.Max(1, hands[handIndex].CardObjects.Count);
+
+        if (seatArcRadius > 0f)
+        {
+            return PlayerSlot(handIndex, 0) + HandRotation(handIndex) * Vector3.right * seatCardSpread * (cardCount - 1) / 2f;
+        }
+
         float spread = hands.Count > 1 ? splitCardOffset : cardSpacing;
         return PlayerSlot(handIndex, 0) + Vector3.right * spread * (cardCount - 1) / 2f;
     }
@@ -1337,6 +1576,102 @@ public class BlackjackGame : MonoBehaviour
 
         textObject.SetActive(false);
         return text;
+    }
+
+    // ---------- Decision clock ----------
+
+    private void StartDecisionClock()
+    {
+        if (decisionTimer != null)
+        {
+            decisionTimer.Begin(decisionSeconds, OnDecisionTimeout, () => run.CanPlay && (CanAct() || isAskingInsurance));
+        }
+    }
+
+    private void StopDecisionClock()
+    {
+        if (decisionTimer != null)
+        {
+            decisionTimer.Cancel();
+        }
+    }
+
+    // Time's up: the safest choice. Insurance: no thanks. Otherwise: stand (no more cards, no more chips at risk).
+    private void OnDecisionTimeout()
+    {
+        if (isAskingInsurance)
+        {
+            DeclineInsurance();
+            return;
+        }
+
+        timedOut = true;
+        Stand();
+    }
+
+    // ---------- Seat frames ----------
+
+    // Each frame gets its own material, so frames can light up on their own
+    private void SetUpSeatFrames()
+    {
+        if (seatFrames == null)
+        {
+            return;
+        }
+
+        frameMaterials = new Material[seatFrames.Length];
+
+        for (int i = 0; i < seatFrames.Length; i++)
+        {
+            if (seatFrames[i] != null)
+            {
+                frameMaterials[i] = seatFrames[i].material;
+            }
+        }
+    }
+
+    // Every frame sits on its seat. Frames with cards glow; the hand being played (after a split) glows gold.
+    private void UpdateSeatFrames()
+    {
+        if (frameMaterials == null || seatArcRadius <= 0f)
+        {
+            return;
+        }
+
+        int middle = seatFrames.Length / 2;
+        bool playing = isHandInProgress && !isDealerTurn && !isAskingInsurance;
+
+        for (int i = 0; i < seatFrames.Length; i++)
+        {
+            if (seatFrames[i] == null)
+            {
+                continue;
+            }
+
+            int seat = i - middle;
+            Transform frame = seatFrames[i].transform;
+            frame.SetPositionAndRotation(OnTable(SeatPosition(seat)) + Vector3.up * 0.005f, SeatRotation(seat));
+
+            Color color = frameIdleColor;
+
+            for (int h = 0; h < hands.Count; h++)
+            {
+                if (SeatFor(h) != seat || hands[h].CardObjects.Count == 0)
+                {
+                    continue;
+                }
+
+                color = frameUsedColor;
+
+                if (playing && hands.Count > 1 && h == activeIndex)
+                {
+                    float pulse = (Mathf.Sin(Time.time * 5f) + 1f) * 0.5f;
+                    color = Color.Lerp(frameActiveColor, Color.white, pulse * 0.35f);
+                }
+            }
+
+            frameMaterials[i].SetColor("_BaseColor", color);
+        }
     }
 
     // A flat arrow pointing away from the player (+Z), its tip at the object's position.

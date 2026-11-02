@@ -39,6 +39,13 @@ public class HighLowGame : MonoBehaviour
     [Header("Animation")]
     [SerializeField] private float revealPause = 0.4f;   // Pause on the drawn card before the table is tidied
 
+    [Header("Timer")]
+    [SerializeField] private DecisionTimer decisionTimer;  // The countdown ring on the felt (empty = no time limit)
+    [SerializeField] private float decisionSeconds = 6f;   // After a guess, the next one must come within this time
+
+    private bool playerIsActive;   // The player guessed by themselves; the clock only runs then
+    private string autoNote;       // "Time's up!" line for the result, after the game guessed for the player
+
     private readonly List<TableCard> cardsOnTable = new List<TableCard>();
     private TableCard currentCardObject;
 
@@ -56,14 +63,15 @@ public class HighLowGame : MonoBehaviour
         lowerButtonText = lowerButton.GetComponentInChildren<TMP_Text>();
         tieButtonText = tieButton.GetComponentInChildren<TMP_Text>();
 
-        higherButton.onClick.AddListener(() => Guess(GuessType.Higher));
-        lowerButton.onClick.AddListener(() => Guess(GuessType.Lower));
-        tieButton.onClick.AddListener(() => Guess(GuessType.Tie));
+        higherButton.onClick.AddListener(() => PlayerGuess(GuessType.Higher));
+        lowerButton.onClick.AddListener(() => PlayerGuess(GuessType.Lower));
+        tieButton.onClick.AddListener(() => PlayerGuess(GuessType.Tie));
     }
 
     private void OnEnable()
     {
         run.StateChanged += RefreshUI;
+        run.RoundStarted += StopClockUntilPlayerGuesses;
         ResetGame();
         RefreshUI();
     }
@@ -71,6 +79,41 @@ public class HighLowGame : MonoBehaviour
     private void OnDisable()
     {
         run.StateChanged -= RefreshUI;
+        run.RoundStarted -= StopClockUntilPlayerGuesses;
+        StopClockUntilPlayerGuesses();
+    }
+
+    // The player pressed a button themselves: from now on the clock runs between guesses
+    private void PlayerGuess(GuessType guess)
+    {
+        if (!run.CanPlay || isAnimating)
+        {
+            return;
+        }
+
+        playerIsActive = true;
+        autoNote = null;
+        Guess(guess);
+    }
+
+    // Time's up: the game guesses higher or lower at random. Then the clock waits until the player guesses again,
+    // so a player who walked away doesn't lose all their plays.
+    private void GuessForPlayer()
+    {
+        GuessType guess = Random.value < 0.5f ? GuessType.Higher : GuessType.Lower;
+        playerIsActive = false;
+        autoNote = $"Time's up! Random guess: {guess.ToString().ToUpper()}.";
+        Guess(guess);
+    }
+
+    private void StopClockUntilPlayerGuesses()
+    {
+        playerIsActive = false;
+
+        if (decisionTimer != null)
+        {
+            decisionTimer.Cancel();
+        }
     }
 
     // Clear the table and deal a fresh opening card
@@ -102,6 +145,11 @@ public class HighLowGame : MonoBehaviour
         if (!run.CanPlay || isAnimating)
         {
             return;
+        }
+
+        if (decisionTimer != null)
+        {
+            decisionTimer.Cancel();
         }
 
         StartCoroutine(GuessRoutine(guess));
@@ -193,9 +241,21 @@ public class HighLowGame : MonoBehaviour
             currentCardObject = fresh;
         }
 
+        if (autoNote != null)
+        {
+            message = autoNote + "\n" + message;
+            autoNote = null;
+        }
+
         isAnimating = false;
         run.SetMinigameBusy(false);
         run.FinishPlay(chipChange, damage, message);
+
+        // The next guess is on the clock (only if the player is playing, and the round goes on)
+        if (playerIsActive && decisionTimer != null && run.CanPlay)
+        {
+            decisionTimer.Begin(decisionSeconds, GuessForPlayer, () => run.CanPlay && !isAnimating);
+        }
     }
 
     // A new face-down card appears on the deck

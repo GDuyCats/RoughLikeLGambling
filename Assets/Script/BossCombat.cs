@@ -1083,24 +1083,25 @@ public class BossCombat : MonoBehaviour
 
         string attackName = (isEnraged ? "FURIOUS " : "") + string.Join(" + ", names);
 
-        string message = $"{attackName}: {string.Join(", ", parts)}. You take {outcome.DamageTaken} damage";
+        // Headline: what happened. Second line: the numbers.
+        List<string> numbers = new List<string> { $"You take {outcome.DamageTaken} damage" };
 
         if (outcome.BossDamage > 0)
         {
-            message += $", the boss takes {outcome.BossDamage}";
+            numbers.Add($"boss takes {outcome.BossDamage}");
         }
 
         if (outcome.HealAmount > 0)
         {
-            message += $", you heal {outcome.HealAmount}";
+            numbers.Add($"you heal {outcome.HealAmount}");
         }
 
         if (topTempo > 1.05f)
         {
-            message += $". Tempo reached x{topTempo:0.0}";
+            numbers.Add($"tempo x{topTempo:0.0}");
         }
 
-        return message + ".";
+        return $"{attackName}: {string.Join(", ", parts)}\n{string.Join("  ·  ", numbers)}";
     }
 
     private GameObject SpawnChip()
