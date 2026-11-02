@@ -30,7 +30,7 @@ public static class TableSpots
 
     // Message signs
     public const float MessageZ = -3.4f;
-    public const float BlackjackMessageZ = -4.5f;
+    public const float BlackjackMessageZ = -5.1f;
     public const float BlackjackSignWidth = 14f;
 
     // The dealer
@@ -45,7 +45,7 @@ public static class TableSpots
         {
             MinigameType.HighLow => new Vector3(-4.2f, 0f, -1.1f),
             MinigameType.Dice => new Vector3(-5.4f, 0f, -1.1f),
-            _ => new Vector3(-6.2f, 0f, -3.6f)   // Blackjack: left of the seats, inside the half-moon
+            _ => new Vector3(-6.6f, 0f, -3.7f)   // Blackjack: below-left of the seats
         };
     }
 
@@ -53,8 +53,8 @@ public static class TableSpots
 
     public static readonly Vector3 ArcCenter = new Vector3(0f, 0f, 9f);   // Middle of the half-moon's straight side
     public const float HalfMoonRadius = 14.9f;
-    public const float SeatRadius = 10.3f;                     // The middle seat sits at z = 9 - 10.3 = -1.3
-    public const float SeatAngle = 28f;
+    public const float SeatRadius = 11.3f;                     // The middle seat sits at z = 9 - 11.3 = -2.3, close to the player
+    public const float SeatAngle = 26f;
     public const float SeatCardSpread = 1f;
     public static readonly Vector3 DealerRowStart = new Vector3(-1f, 0f, 5.5f);
     public static readonly Vector3 PlayerRowStart = new Vector3(-1f, 0f, ArcCenter.z - SeatRadius);   // + half a card spacing (1) = the middle seat

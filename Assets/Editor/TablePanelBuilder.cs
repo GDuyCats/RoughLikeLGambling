@@ -45,7 +45,7 @@ public static class TablePanelBuilder
     private static readonly string[] ActionOrder =
     {
         "Hit", "Stand", "Deal", "Surrender", "Split", "Double",
-        "Higher", "Lower", "Tie",
+        "Higher", "Lower", "CashOut", "Tie",
         "Under", "Seven", "Over"
     };
 
@@ -73,7 +73,8 @@ public static class TablePanelBuilder
         ("Insurance", new Color(0.1f, 0.65f, 0.7f)),
         ("Higher", new Color(0.2f, 0.7f, 0.3f)),
         ("Lower", new Color(0.85f, 0.2f, 0.2f)),
-        ("Tie", new Color(1f, 0.75f, 0.15f)),
+        ("CashOut", new Color(1f, 0.75f, 0.15f)),
+        ("Tie", new Color(0.6f, 0.3f, 0.85f)),
         ("Under", new Color(0.2f, 0.45f, 0.9f)),
         ("Seven", new Color(1f, 0.75f, 0.15f)),
         ("Over", new Color(0.85f, 0.2f, 0.2f))
@@ -86,6 +87,7 @@ public static class TablePanelBuilder
     {
         Transform arena = table.Arena.transform;
         GameObject minigamePanel = new SerializedObject(table).FindProperty("minigamePanel").objectReferenceValue as GameObject;
+        string cashOutReport = table.Minigame == MinigameType.HighLow ? EnsureCashOutButton(arena) : "";
 
         // The minigame's own buttons, grouped by spot (Insurance shares Hit's spot, No Thanks shares Stand's)
         List<List<TableButton>> groups = GroupActionButtons(arena);
@@ -118,9 +120,9 @@ public static class TablePanelBuilder
 
         MakePlate(arena, "ActionPlate", -TableSpots.PanelCenter);
         MakePlate(arena, "BetPlate", TableSpots.PanelCenter);
-        string timerReport = MakeDecisionTimer(table, arena, font);
+        string timerReport = RemoveDecisionTimer(table, arena);
 
-        return $"{table.name}: {groups.Count} action buttons in the left panel.{betReport}{timerReport}";
+        return $"{table.name}: {groups.Count} action buttons in the left panel.{cashOutReport}{betReport}{timerReport}";
     }
 
     // ---------- Action buttons ----------
@@ -215,6 +217,42 @@ public static class TablePanelBuilder
             standHeight.floatValue *= factor;
             fields.ApplyModifiedProperties();
         }
+    }
+
+    // High-Low is a ladder now: it needs a CASH OUT button (a copy of TIE, screen and table)
+    private static string EnsureCashOutButton(Transform arena)
+    {
+        HighLowGame game = Object.FindFirstObjectByType<HighLowGame>(FindObjectsInactive.Include);
+
+        if (game == null)
+        {
+            return " No High-Low game found for the CASH OUT button.";
+        }
+
+        SerializedObject gameFields = new SerializedObject(game);
+
+        if (gameFields.FindProperty("cashOutButton").objectReferenceValue != null)
+        {
+            return "";
+        }
+
+        Button tie = gameFields.FindProperty("tieButton").objectReferenceValue as Button;
+        TableButton tieOnTable = tie != null ? FindTableButtonFor(arena, tie) : null;
+
+        if (tie == null || tieOnTable == null)
+        {
+            return " Could not copy the TIE button for CASH OUT.";
+        }
+
+        Button cashOut = CopyScreenButton(tie, "CashOutButton", "CASH OUT");
+        TableButton cashOutOnTable = CopyTableButton(tieOnTable, cashOut, "TableCashOut");
+
+        // Off to the side for now, so it gets its own place in the panel
+        cashOutOnTable.transform.position += Vector3.right * 3f;
+
+        gameFields.FindProperty("cashOutButton").objectReferenceValue = cashOut;
+        gameFields.ApplyModifiedProperties();
+        return " CASH OUT button added.";
     }
 
     // ---------- Bet panel ----------
@@ -391,7 +429,29 @@ public static class TablePanelBuilder
         return text;
     }
 
-    // The countdown ring above the action panel, linked to this table's minigame
+    // The countdown ring is not used any more (8 decks make counting cards pointless): remove it from the table
+    private static string RemoveDecisionTimer(TableStation table, Transform arena)
+    {
+        TableMaterials.RemoveOld(arena, "DecisionTimer");
+
+        MonoBehaviour game = table.Minigame switch
+        {
+            MinigameType.HighLow => (MonoBehaviour)Object.FindFirstObjectByType<HighLowGame>(FindObjectsInactive.Include),
+            MinigameType.Dice => Object.FindFirstObjectByType<DiceGame>(FindObjectsInactive.Include),
+            _ => Object.FindFirstObjectByType<BlackjackGame>(FindObjectsInactive.Include)
+        };
+
+        if (game != null)
+        {
+            SerializedObject gameFields = new SerializedObject(game);
+            gameFields.FindProperty("decisionTimer").objectReferenceValue = null;
+            gameFields.ApplyModifiedProperties();
+        }
+
+        return " No time limit.";
+    }
+
+    // (Not used now.) The countdown ring above the action panel, linked to this table's minigame
     private static string MakeDecisionTimer(TableStation table, Transform arena, TMP_FontAsset font)
     {
         Transform existing = arena.Find("DecisionTimer");
